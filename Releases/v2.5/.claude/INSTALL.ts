@@ -32,7 +32,9 @@ const c = {
 
 // Paths
 const HOME = homedir();
-const CLAUDE_DIR = join(HOME, '.claude');
+const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR
+  ? join(process.env.CLAUDE_CONFIG_DIR)
+  : join(HOME, '.claude');
 const ZSHRC = join(HOME, '.zshrc');
 const VOICE_SERVER_DIR = join(CLAUDE_DIR, 'VoiceServer');
 const VOICE_SERVER_PORT = 8888;
@@ -103,18 +105,10 @@ async function promptChoice(question: string, choices: string[], defaultIdx = 0)
 }
 
 // ============================================================================
-// PERMISSIONS (chmod → chown → chmod)
+// PERMISSIONS (chown → chmod dirs → chmod files → chmod scripts)
 // ============================================================================
 
 function fixPermissions(targetDir: string): void {
-  if (process.platform === 'win32') {
-    print('');
-    print(`${c.bold}Permissions${c.reset}`);
-    print(`${c.gray}─────────────────────────────────────────────────${c.reset}`);
-    printSuccess('Windows: No permission fixes needed (NTFS handles this)');
-    return;
-  }
-
   const info = userInfo();
 
   print('');
@@ -122,21 +116,25 @@ function fixPermissions(targetDir: string): void {
   print(`${c.gray}─────────────────────────────────────────────────${c.reset}`);
 
   try {
-    execSync(`chmod -R 755 "${targetDir}"`, { stdio: 'pipe' });
-    printSuccess('Step 1: chmod -R 755 (make accessible)');
-
+    // Step 1: chown - change ownership to current user
     execSync(`chown -R ${info.uid}:${info.gid} "${targetDir}"`, { stdio: 'pipe' });
-    printSuccess(`Step 2: chown -R to ${info.username}`);
+    printSuccess(`Ownership set to ${info.username} (${info.uid}:${info.gid})`);
 
-    execSync(`chmod -R 755 "${targetDir}"`, { stdio: 'pipe' });
-    printSuccess('Step 3: chmod -R 755 (final permissions)');
+    // Step 2: directories get rwxr-x--- (750)
+    execSync(`find "${targetDir}" -type d -exec chmod 750 {} +`, { stdio: 'pipe' });
+    printSuccess('Directories set to 750 (rwxr-x---)');
 
-    for (const pattern of ['*.ts', '*.sh', '*.hook.ts']) {
+    // Step 3: regular files get rw-r----- (640)
+    execSync(`find "${targetDir}" -type f -exec chmod 640 {} +`, { stdio: 'pipe' });
+    printSuccess('Files set to 640 (rw-r-----)');
+
+    // Step 4: scripts get rwxr-x--- (750)
+    for (const pattern of ['*.ts', '*.sh', '*.py']) {
       try {
-        execSync(`find "${targetDir}" -name "${pattern}" -exec chmod 755 {} \\;`, { stdio: 'pipe' });
+        execSync(`find "${targetDir}" -type f -name "${pattern}" -exec chmod 750 {} +`, { stdio: 'pipe' });
       } catch (e) { /* ignore */ }
     }
-    printSuccess('Set executable permissions on scripts');
+    printSuccess('Scripts (.ts, .sh, .py) set to 750 (rwxr-x---)');
 
   } catch (err: any) {
     printError(`Permission fix failed: ${err.message}`);
@@ -150,10 +148,6 @@ function fixPermissions(targetDir: string): void {
 
 function findRunningVoiceServers(): number[] {
   try {
-    if (process.platform === 'win32') {
-      const result = execSync(`netstat -ano | findstr :${VOICE_SERVER_PORT}`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
-      return result.trim().split('\n').map(line => parseInt(line.trim().split(/\s+/).pop() || '')).filter(n => !isNaN(n) && n > 0);
-    }
     const result = execSync(`lsof -ti:${VOICE_SERVER_PORT}`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
     return result.trim().split('\n').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
   } catch (e) {
@@ -167,8 +161,7 @@ function killVoiceServers(): void {
     printInfo(`Killing ${pids.length} existing voice server(s)`);
     for (const pid of pids) {
       try {
-        const killCmd = process.platform === 'win32' ? `taskkill /F /PID ${pid}` : `kill -9 ${pid}`;
-        execSync(killCmd, { stdio: 'pipe' });
+        execSync(`kill -9 ${pid}`, { stdio: 'pipe' });
         printSuccess(`Killed process ${pid}`);
       } catch (e) { /* ignore */ }
     }
@@ -247,27 +240,21 @@ function installBun(): void {
     // Bun not installed, install it
     printInfo('Bun not found, installing...');
     try {
-      if (process.platform === 'win32') {
-        execSync('powershell -c "irm bun.sh/install.ps1 | iex"', { stdio: 'inherit' });
-      } else {
-        execSync('curl -fsSL https://bun.sh/install | bash', {
-          stdio: 'inherit',
-          shell: '/bin/bash'
-        });
-      }
+      execSync('curl -fsSL https://bun.sh/install | bash', {
+        stdio: 'inherit',
+        shell: '/bin/bash'
+      });
 
       // Source the new bun path
       const bunPath = join(HOME, '.bun/bin');
-      process.env.PATH = `${bunPath}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH}`;
+      process.env.PATH = `${bunPath}:${process.env.PATH}`;
 
       const newVersion = execSync('bun --version', { encoding: 'utf-8' }).trim();
       printSuccess(`Bun ${newVersion} installed`);
       printInfo('You may need to restart your terminal for bun to be in PATH');
     } catch (err: any) {
       printError(`Failed to install Bun: ${err.message}`);
-      printInfo(process.platform === 'win32'
-        ? 'Please install manually: powershell -c "irm bun.sh/install.ps1 | iex"'
-        : 'Please install manually: curl -fsSL https://bun.sh/install | bash');
+      printInfo('Please install manually: curl -fsSL https://bun.sh/install | bash');
     }
   }
 }
@@ -307,21 +294,6 @@ function generateSettingsJson(config: InstallConfig): object {
   const AI_NAME = config.AI_NAME || 'PAI';
   const VOICE_ID = config.CUSTOM_VOICE_ID || DEFAULT_VOICES[config.VOICE_TYPE || 'male'];
   const CATCHPHRASE = config.CATCHPHRASE || `${AI_NAME} here, ready to go.`;
-  const IS_WINDOWS = process.platform === 'win32';
-
-  // On Windows, Claude Code hooks don't expand ${VAR} shell syntax,
-  // and shebangs don't work, so we must hardcode the path and prepend `bun`.
-  // On macOS/Linux, ${PAI_DIR} expansion works and shebangs handle execution.
-  const hookCmd = (hookName: string) => {
-    if (IS_WINDOWS) {
-      return `bun "${CLAUDE_DIR}/hooks/${hookName}"`;
-    }
-    return `\${PAI_DIR}/hooks/${hookName}`;
-  };
-
-  const statusLineCmd = IS_WINDOWS
-    ? `bun "${CLAUDE_DIR}/statusline-command.sh"`
-    : `\${PAI_DIR}/statusline-command.sh`;
 
   return {
     "$schema": "https://json.schemastore.org/claude-code-settings.json",
@@ -360,11 +332,11 @@ function generateSettingsJson(config: InstallConfig): object {
     },
     "pai": {
       "repoUrl": "github.com/danielmiessler/PAI",
-      "version": "2.4"
+      "version": "2.5"
     },
     "techStack": {
-      "browser": IS_WINDOWS ? "edge" : "arc",
-      "terminal": IS_WINDOWS ? "Windows Terminal" : "terminal",
+      "browser": "arc",
+      "terminal": "terminal",
       "packageManager": "bun",
       "pythonPackageManager": "pip",
       "language": "TypeScript",
@@ -380,13 +352,8 @@ function generateSettingsJson(config: InstallConfig): object {
       "ask": [
         "Bash(rm -rf /)", "Bash(rm -rf /:*)", "Bash(sudo rm -rf /)", "Bash(sudo rm -rf /:*)",
         "Bash(rm -rf ~)", "Bash(rm -rf ~:*)", "Bash(rm -rf ~/.claude)", "Bash(rm -rf ~/.claude:*)",
-        ...(IS_WINDOWS ? [
-          "Bash(del /s /q C:\\:*)", "Bash(rmdir /s /q C:\\:*)",
-          "Bash(format:*)"
-        ] : [
-          "Bash(diskutil eraseDisk:*)", "Bash(diskutil zeroDisk:*)", "Bash(diskutil partitionDisk:*)",
-          "Bash(diskutil apfs deleteContainer:*)", "Bash(diskutil apfs eraseVolume:*)",
-        ]),
+        "Bash(diskutil eraseDisk:*)", "Bash(diskutil zeroDisk:*)", "Bash(diskutil partitionDisk:*)",
+        "Bash(diskutil apfs deleteContainer:*)", "Bash(diskutil apfs eraseVolume:*)",
         "Bash(dd if=/dev/zero:*)", "Bash(mkfs:*)", "Bash(gh repo delete:*)",
         "Bash(gh repo edit --visibility public:*)", "Bash(git push --force:*)",
         "Bash(git push -f:*)", "Bash(git push origin --force:*)", "Bash(git push origin -f:*)",
@@ -400,41 +367,41 @@ function generateSettingsJson(config: InstallConfig): object {
     "enabledMcpjsonServers": [],
     "hooks": {
       "PreToolUse": [
-        { "matcher": "Bash", "hooks": [{ "type": "command", "command": hookCmd("SecurityValidator.hook.ts") }] },
-        { "matcher": "Edit", "hooks": [{ "type": "command", "command": hookCmd("SecurityValidator.hook.ts") }] },
-        { "matcher": "Write", "hooks": [{ "type": "command", "command": hookCmd("SecurityValidator.hook.ts") }] },
-        { "matcher": "Read", "hooks": [{ "type": "command", "command": hookCmd("SecurityValidator.hook.ts") }] },
-        { "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": hookCmd("SetQuestionTab.hook.ts") }] }
+        { "matcher": "Bash", "hooks": [{ "type": "command", "command": "${PAI_DIR}/hooks/SecurityValidator.hook.ts" }] },
+        { "matcher": "Edit", "hooks": [{ "type": "command", "command": "${PAI_DIR}/hooks/SecurityValidator.hook.ts" }] },
+        { "matcher": "Write", "hooks": [{ "type": "command", "command": "${PAI_DIR}/hooks/SecurityValidator.hook.ts" }] },
+        { "matcher": "Read", "hooks": [{ "type": "command", "command": "${PAI_DIR}/hooks/SecurityValidator.hook.ts" }] },
+        { "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": "${PAI_DIR}/hooks/SetQuestionTab.hook.ts" }] }
       ],
       "PostToolUse": [
-        { "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": hookCmd("QuestionAnswered.hook.ts") }] }
+        { "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": "${PAI_DIR}/hooks/QuestionAnswered.hook.ts" }] }
       ],
       "SessionEnd": [
         { "hooks": [
-          { "type": "command", "command": hookCmd("WorkCompletionLearning.hook.ts") },
-          { "type": "command", "command": hookCmd("SessionSummary.hook.ts") }
+          { "type": "command", "command": "${PAI_DIR}/hooks/WorkCompletionLearning.hook.ts" },
+          { "type": "command", "command": "${PAI_DIR}/hooks/SessionSummary.hook.ts" }
         ]}
       ],
       "UserPromptSubmit": [
         { "hooks": [
-          { "type": "command", "command": hookCmd("FormatReminder.hook.ts") },
-          { "type": "command", "command": hookCmd("AutoWorkCreation.hook.ts") },
-          { "type": "command", "command": hookCmd("ExplicitRatingCapture.hook.ts") },
-          { "type": "command", "command": hookCmd("ImplicitSentimentCapture.hook.ts") },
-          { "type": "command", "command": hookCmd("UpdateTabTitle.hook.ts") }
+          { "type": "command", "command": "${PAI_DIR}/hooks/FormatReminder.hook.ts" },
+          { "type": "command", "command": "${PAI_DIR}/hooks/AutoWorkCreation.hook.ts" },
+          { "type": "command", "command": "${PAI_DIR}/hooks/ExplicitRatingCapture.hook.ts" },
+          { "type": "command", "command": "${PAI_DIR}/hooks/ImplicitSentimentCapture.hook.ts" },
+          { "type": "command", "command": "${PAI_DIR}/hooks/UpdateTabTitle.hook.ts" }
         ]}
       ],
       "SessionStart": [
         { "hooks": [
-          { "type": "command", "command": hookCmd("StartupGreeting.hook.ts") },
-          { "type": "command", "command": hookCmd("LoadContext.hook.ts") },
-          { "type": "command", "command": hookCmd("CheckVersion.hook.ts") }
+          { "type": "command", "command": "${PAI_DIR}/hooks/StartupGreeting.hook.ts" },
+          { "type": "command", "command": "${PAI_DIR}/hooks/LoadContext.hook.ts" },
+          { "type": "command", "command": "${PAI_DIR}/hooks/CheckVersion.hook.ts" }
         ]}
       ],
-      "Stop": [{ "hooks": [{ "type": "command", "command": hookCmd("StopOrchestrator.hook.ts") }] }],
-      "SubagentStop": [{ "hooks": [{ "type": "command", "command": hookCmd("AgentOutputCapture.hook.ts") }] }]
+      "Stop": [{ "hooks": [{ "type": "command", "command": "${PAI_DIR}/hooks/StopOrchestrator.hook.ts" }] }],
+      "SubagentStop": [{ "hooks": [{ "type": "command", "command": "${PAI_DIR}/hooks/AgentOutputCapture.hook.ts" }] }]
     },
-    "statusLine": { "type": "command", "command": statusLineCmd },
+    "statusLine": { "type": "command", "command": "${PAI_DIR}/statusline-command.sh" },
     "alwaysThinkingEnabled": true,
     "_docs": {
       "_overview": "PAI v2.5 settings. Run install wizard to customize.",
@@ -615,14 +582,8 @@ async function main(): Promise<void> {
     printInfo('To enable later: add ELEVENLABS_API_KEY to ~/.claude/.env');
   }
 
-  // Setup alias (skip on Windows — no zsh)
-  if (process.platform !== 'win32') {
-    setupZshAlias();
-  } else {
-    printInfo('Windows detected — skipping zsh alias setup');
-    printInfo(`To create a PAI alias, add to your PowerShell profile:`);
-    printInfo(`  function pai { bun "${CLAUDE_DIR}\\skills\\PAI\\Tools\\pai.ts" @args }`);
-  }
+  // Setup alias
+  setupZshAlias();
 
   // Fix permissions again
   fixPermissions(CLAUDE_DIR);
@@ -641,11 +602,7 @@ async function main(): Promise<void> {
     print(`  ${c.cyan}Your AI:${c.reset} ${AI_NAME}`);
     print(`  ${c.cyan}Principal:${c.reset} ${PRINCIPAL_NAME}`);
     print('');
-    if (process.platform === 'win32') {
-      print(`  ${c.cyan}Next:${c.reset} Restart your terminal and run ${c.green}claude${c.reset}`);
-    } else {
-      print(`  ${c.cyan}Next:${c.reset} Run ${c.green}source ~/.zshrc${c.reset} then ${c.green}pai${c.reset}`);
-    }
+    print(`  ${c.cyan}Next:${c.reset} Run ${c.green}source ~/.zshrc${c.reset} then ${c.green}pai${c.reset}`);
   } else {
     print(`${c.red}${c.bold}✗ Installation has issues${c.reset}`);
   }

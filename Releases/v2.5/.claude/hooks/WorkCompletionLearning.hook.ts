@@ -183,7 +183,7 @@ function writeLearning(workMeta: WorkMeta, idealContent: string): void {
 
   // Don't overwrite existing learnings
   if (existsSync(filepath)) {
-    console.error(`[WorkCompletionLearning] Learning already exists: ${filename}`);
+    // Learning already exists - skip
     return;
   }
 
@@ -235,7 +235,7 @@ ${idealContent || 'Not specified'}
 `;
 
   writeFileSync(filepath, content);
-  console.error(`[WorkCompletionLearning] Created learning: ${filename}`);
+  // Created learning file
 }
 
 async function main() {
@@ -248,7 +248,7 @@ async function main() {
 
     // Check if there's an active work session
     if (!existsSync(CURRENT_WORK_FILE)) {
-      console.error('[WorkCompletionLearning] No active work session');
+      // No active work session
       process.exit(0);
     }
 
@@ -256,7 +256,7 @@ async function main() {
     const currentWork: CurrentWork = JSON.parse(readFileSync(CURRENT_WORK_FILE, 'utf-8'));
 
     if (!currentWork.work_dir) {
-      console.error('[WorkCompletionLearning] No work directory in current session');
+      // No work directory in current session
       process.exit(0);
     }
 
@@ -265,7 +265,7 @@ async function main() {
     const metaPath = join(workPath, 'META.yaml');
 
     if (!existsSync(metaPath)) {
-      console.error('[WorkCompletionLearning] No META.yaml found');
+      // No META.yaml found
       process.exit(0);
     }
 
@@ -309,13 +309,12 @@ async function main() {
     if (hasSignificantWork) {
       writeLearning(workMeta, idealContent);
     } else {
-      console.error('[WorkCompletionLearning] Trivial work session, skipping learning capture');
+      // Trivial work session, skipping learning capture
     }
 
     process.exit(0);
   } catch (error) {
     // Silent failure - don't disrupt workflow
-    console.error(`[WorkCompletionLearning] Error: ${error}`);
     process.exit(0);
   }
 }
