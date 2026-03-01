@@ -1,202 +1,177 @@
 #!/usr/bin/env bun
 /**
- * Voice Server - Personal AI Voice notification server using ElevenLabs TTS
+ * Voice Server - Personal AI Voice notification server
+ *
+ * Architecture: Provider-based TTS with shared infrastructure.
+ * Provider-specific code lives in providers/{name}/index.ts.
+ * This file handles: pronunciation, sanitization, emotion extraction,
+ * caching, playback, desktop notifications, and HTTP routing.
+ *
+ * Config: Set TTS provider via settings.json daidentity.ttsProvider
+ * or TTS_PROVIDER env var. Default: qwen3.
  */
 
 import { serve } from "bun";
 import { spawn } from "child_process";
-import { homedir } from "os";
+import { homedir, tmpdir, platform } from "os";
 import { join } from "path";
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, unlinkSync } from "fs";
+import { TTSCache } from "./tts-cache";
+import { loadProvider } from "./providers/registry";
 
-// Load .env from user home directory
+// Load .env from user home directory (before provider init)
 const envPath = join(homedir(), '.env');
 if (existsSync(envPath)) {
   const envContent = await Bun.file(envPath).text();
   envContent.split('\n').forEach(line => {
-    const eqIndex = line.indexOf('=');
-    if (eqIndex === -1) return;
-    const key = line.slice(0, eqIndex).trim();
-    let value = line.slice(eqIndex + 1).trim();
-    // Strip surrounding quotes (single or double)
-    if ((value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
+    const [key, value] = line.split('=');
     if (key && value && !key.startsWith('#')) {
-      process.env[key] = value;
+      process.env[key.trim()] = value.trim();
     }
   });
 }
 
+// Audio cache — avoids regenerating identical TTS phrases
+const audioCache = new TTSCache({
+  enabled: process.env.TTS_CACHE_ENABLED !== "false",
+  cacheDir: join(homedir(), ".claude", "cache", "tts"),
+  ttlSeconds: parseInt(process.env.TTS_CACHE_TTL || "86400"),
+  maxFiles: parseInt(process.env.TTS_CACHE_MAX_FILES || "500"),
+  maxSizeMB: parseInt(process.env.TTS_CACHE_MAX_SIZE_MB || "500"),
+});
+
+const IS_WINDOWS = platform() === "win32";
 const PORT = parseInt(process.env.PORT || "8888");
-const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
+const DEFAULT_VOLUME = 1.0;
 
-if (!ELEVENLABS_API_KEY) {
-  console.error('Warning: ELEVENLABS_API_KEY not found in ~/.env');
-  console.error('Voice server will use macOS say command as fallback');
-  console.error('Add: ELEVENLABS_API_KEY=your_key_here to ~/.env');
+// Initialize TTS provider
+const provider = loadProvider();
+
+// ==========================================================================
+// Pronunciation System
+// ==========================================================================
+
+interface PronunciationEntry {
+  term: string;
+  phonetic: string;
+  note?: string;
 }
 
-// Load settings.json for DA identity and default voice
-let daVoiceId: string | null = null;
-let daVoiceProsody: ProsodySettings | null = null;
-let daName = "Assistant";
-try {
-  const settingsPath = join(homedir(), '.claude', 'settings.json');
-  if (existsSync(settingsPath)) {
-    const settingsContent = readFileSync(settingsPath, 'utf-8');
-    const settings = JSON.parse(settingsContent);
-    if (settings.daidentity?.voiceId) {
-      daVoiceId = settings.daidentity.voiceId;
-      console.log(`Loaded DA voice ID from settings.json`);
+interface PronunciationConfig {
+  replacements: PronunciationEntry[];
+}
+
+// Compiled pronunciation rules (loaded once at startup)
+interface CompiledRule {
+  regex: RegExp;
+  phonetic: string;
+}
+
+let pronunciationRules: CompiledRule[] = [];
+
+// Load and compile pronunciation rules from pronunciations.json
+function loadPronunciations(): void {
+  const pronPath = join(import.meta.dir, 'pronunciations.json');
+  try {
+    if (!existsSync(pronPath)) {
+      console.warn('⚠️  No pronunciations.json found — TTS will use default pronunciations');
+      return;
     }
-    if (settings.daidentity?.name) {
-      daName = settings.daidentity.name;
+    const content = readFileSync(pronPath, 'utf-8');
+    const config: PronunciationConfig = JSON.parse(content);
+
+    pronunciationRules = config.replacements.map(entry => ({
+      // Word-boundary matching: \b ensures "Kai" matches but "Kaiser" doesn't
+      regex: new RegExp(`\\b${escapeRegex(entry.term)}\\b`, 'g'),
+      phonetic: entry.phonetic,
+    }));
+
+    console.log(`📖 Loaded ${pronunciationRules.length} pronunciation rules`);
+    for (const entry of config.replacements) {
+      console.log(`   ${entry.term} → ${entry.phonetic} (${entry.note || ''})`);
     }
-    if (settings.daidentity?.voice) {
-      daVoiceProsody = settings.daidentity.voice as ProsodySettings;
-      console.log(`Loaded DA voice prosody from settings.json`);
-    }
+  } catch (error) {
+    console.error('⚠️  Failed to load pronunciations.json:', error);
   }
-} catch (error) {
-  console.warn('Failed to load DA voice settings from settings.json');
 }
 
-if (!daVoiceId) {
-  console.warn('No voiceId configured in settings.json daidentity section');
-  console.warn('Add: "daidentity": { "voiceId": "your_elevenlabs_voice_id" }');
+// Escape special regex characters in a literal string
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// Default voice ID from settings.json or environment variable
-const DEFAULT_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || daVoiceId || "";
-
-// Voice configuration types
-interface ProsodySettings {
-  stability: number;
-  similarity_boost: number;
-  style: number;
-  speed: number;
-  use_speaker_boost: boolean;
-  volume?: number;  // Playback volume (0.0-1.0), optional
-}
-
-interface VoiceConfig {
-  voice_id: string;
-  voice_name: string;
-  stability: number;
-  similarity_boost: number;
-  style?: number;
-  speed?: number;
-  use_speaker_boost?: boolean;
-  prosody?: ProsodySettings;
-  description: string;
-  type: string;
-}
-
-interface VoicesConfig {
-  voices: Record<string, VoiceConfig>;
-}
-
-// Default voice settings (ElevenLabs API defaults)
-const DEFAULT_PROSODY: ProsodySettings = {
-  stability: 0.5,
-  similarity_boost: 0.75,
-  style: 0.0,
-  speed: 1.0,
-  use_speaker_boost: true,
-};
-
-// Load voices configuration from CORE skill (canonical source for agent voices)
-let voicesConfig: VoicesConfig | null = null;
-try {
-  const corePersonalitiesPath = join(homedir(), '.claude', 'skills', 'CORE', 'SYSTEM', 'AGENTPERSONALITIES.md');
-  if (existsSync(corePersonalitiesPath)) {
-    const markdownContent = readFileSync(corePersonalitiesPath, 'utf-8');
-    // Extract JSON block from markdown
-    const jsonMatch = markdownContent.match(/```json\n([\s\S]*?)\n```/);
-    if (jsonMatch && jsonMatch[1]) {
-      voicesConfig = JSON.parse(jsonMatch[1]);
-      console.log('Loaded agent voice personalities from AGENTPERSONALITIES.md');
-    }
-  }
-} catch (error) {
-  console.warn('Failed to load agent voice personalities');
-}
-
-// Load user pronunciation customizations
-let pronunciations: Record<string, string> = {};
-try {
-  const pronunciationsPath = join(homedir(), '.claude', 'skills', 'CORE', 'USER', 'pronunciations.json');
-  if (existsSync(pronunciationsPath)) {
-    const content = readFileSync(pronunciationsPath, 'utf-8');
-    pronunciations = JSON.parse(content);
-    console.log(`Loaded ${Object.keys(pronunciations).length} pronunciation(s) from USER config`);
-  }
-} catch (error) {
-  console.warn('Failed to load pronunciation customizations');
-}
-
-// Apply pronunciation substitutions to text before TTS
+// Apply all pronunciation replacements to text before TTS
 function applyPronunciations(text: string): string {
   let result = text;
-  for (const [term, pronunciation] of Object.entries(pronunciations)) {
-    // Case-insensitive replacement with word boundaries
-    const regex = new RegExp(`\\b${term}\\b`, 'gi');
-    result = result.replace(regex, pronunciation);
+  for (const rule of pronunciationRules) {
+    result = result.replace(rule.regex, rule.phonetic);
   }
   return result;
 }
 
+// Load pronunciations at startup
+loadPronunciations();
+
+// ==========================================================================
+// Shared Utilities — emotion, sanitization, audio playback, notifications
+// ==========================================================================
+
 // Escape special characters for AppleScript
 function escapeForAppleScript(input: string): string {
-  // Escape backslashes first, then double quotes
   return input.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
-// Strip any bracket markers from message (legacy cleanup)
-function stripMarkers(message: string): string {
-  return message.replace(/\[[^\]]*\]/g, '').trim();
-}
+// Extract emotional marker from message
+function extractEmotionalMarker(message: string): { cleaned: string; emotion?: string } {
+  const emojiToEmotion: Record<string, string> = {
+    '\u{1F4A5}': 'excited',
+    '\u{1F389}': 'celebration',
+    '\u{1F4A1}': 'insight',
+    '\u{1F3A8}': 'creative',
+    '\u{2728}': 'success',
+    '\u{1F4C8}': 'progress',
+    '\u{1F50D}': 'investigating',
+    '\u{1F41B}': 'debugging',
+    '\u{1F4DA}': 'learning',
+    '\u{1F914}': 'pondering',
+    '\u{1F3AF}': 'focused',
+    '\u{26A0}\u{FE0F}': 'caution',
+    '\u{1F6A8}': 'urgent'
+  };
 
-// Get voice configuration by voice ID or agent name
-function getVoiceConfig(identifier: string): VoiceConfig | null {
-  if (!voicesConfig) return null;
+  const emotionMatch = message.match(/\[(\u{1F4A5}|\u{1F389}|\u{1F4A1}|\u{1F3A8}|\u{2728}|\u{1F4C8}|\u{1F50D}|\u{1F41B}|\u{1F4DA}|\u{1F914}|\u{1F3AF}|\u{26A0}\u{FE0F}|\u{1F6A8})\s+(\w+)\]/u);
+  if (emotionMatch) {
+    const emoji = emotionMatch[1];
+    const emotionName = emotionMatch[2].toLowerCase();
 
-  // Try direct agent name lookup
-  if (voicesConfig.voices[identifier]) {
-    return voicesConfig.voices[identifier];
-  }
-
-  // Try voice_id lookup
-  for (const config of Object.values(voicesConfig.voices)) {
-    if (config.voice_id === identifier) {
-      return config;
+    if (emojiToEmotion[emoji] === emotionName) {
+      return {
+        cleaned: message.replace(emotionMatch[0], '').trim(),
+        emotion: emotionName
+      };
     }
   }
 
-  return null;
+  return { cleaned: message };
 }
 
-// Sanitize input for TTS and notifications - allow natural speech punctuation
+// Sanitize input for TTS and notifications
 function sanitizeForSpeech(input: string): string {
-  // Allow: letters, numbers, spaces, common punctuation for natural speech
-  // Explicitly block: shell metacharacters, path traversal, script tags, markdown
   const cleaned = input
-    .replace(/<script/gi, '')  // Remove script tags
-    .replace(/\.\.\//g, '')     // Remove path traversal
-    .replace(/[;&|><`$\\]/g, '') // Remove shell metacharacters
-    .replace(/\*\*([^*]+)\*\*/g, '$1')  // Strip bold markdown: **text** -> text
-    .replace(/\*([^*]+)\*/g, '$1')       // Strip italic markdown: *text* -> text
-    .replace(/`([^`]+)`/g, '$1')         // Strip inline code: `text` -> text
-    .replace(/#{1,6}\s+/g, '')           // Strip markdown headers: ### -> (empty)
+    .replace(/<script/gi, '')
+    .replace(/\.\.\//g, '')
+    .replace(/[;&|><`$\\]/g, '')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/#{1,6}\s+/g, '')
     .trim()
     .substring(0, 500);
 
   return cleaned;
 }
 
-// Validate user input - check for obviously malicious content
+// Validate user input
 function validateInput(input: any): { valid: boolean; error?: string; sanitized?: string } {
   if (!input || typeof input !== 'string') {
     return { valid: false, error: 'Invalid input type' };
@@ -206,7 +181,6 @@ function validateInput(input: any): { valid: boolean; error?: string; sanitized?
     return { valid: false, error: 'Message too long (max 500 characters)' };
   }
 
-  // Sanitize and check if anything remains
   const sanitized = sanitizeForSpeech(input);
 
   if (!sanitized || sanitized.length === 0) {
@@ -216,113 +190,52 @@ function validateInput(input: any): { valid: boolean; error?: string; sanitized?
   return { valid: true, sanitized };
 }
 
-// Generate speech using ElevenLabs API with full prosody support
-async function generateSpeech(
-  text: string,
-  voiceId: string,
-  prosody?: Partial<ProsodySettings>
-): Promise<ArrayBuffer> {
-  if (!ELEVENLABS_API_KEY) {
-    throw new Error('ElevenLabs API key not configured');
-  }
+// Play audio — cross-platform (Windows: PowerShell/ffplay, macOS: afplay)
+async function playAudio(audioBuffer: ArrayBuffer, volume: number = DEFAULT_VOLUME): Promise<void> {
+  const tempFile = join(tmpdir(), `voice-${Date.now()}.mp3`);
 
-  const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
-
-  // Merge provided prosody with defaults
-  const settings = { ...DEFAULT_PROSODY, ...prosody };
-
-  // ElevenLabs API voice_settings format (speed goes INSIDE voice_settings)
-  const voiceSettings = {
-    stability: settings.stability,
-    similarity_boost: settings.similarity_boost,
-    style: settings.style,
-    speed: settings.speed, // Speed belongs in voice_settings, not top-level
-    use_speaker_boost: settings.use_speaker_boost,
-  };
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Accept': 'audio/mpeg',
-      'Content-Type': 'application/json',
-      'xi-api-key': ELEVENLABS_API_KEY,
-    },
-    body: JSON.stringify({
-      text: text,
-      model_id: 'eleven_turbo_v2_5',
-      voice_settings: voiceSettings,
-    }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`ElevenLabs API error: ${response.status} - ${errorText}`);
-  }
-
-  return await response.arrayBuffer();
-}
-
-// Get volume setting from DA config or request (defaults to 1.0 = 100%)
-function getVolumeSetting(requestVolume?: number): number {
-  // Request volume takes priority
-  if (typeof requestVolume === 'number' && requestVolume >= 0 && requestVolume <= 1) {
-    return requestVolume;
-  }
-  // Then DA voice config from settings.json
-  if (daVoiceProsody?.volume !== undefined && daVoiceProsody.volume >= 0 && daVoiceProsody.volume <= 1) {
-    return daVoiceProsody.volume;
-  }
-  return 1.0; // Default to full volume
-}
-
-// Play audio using afplay (macOS)
-async function playAudio(audioBuffer: ArrayBuffer, requestVolume?: number): Promise<void> {
-  const tempFile = `/tmp/voice-${Date.now()}.mp3`;
-
-  // Write audio to temp file
   await Bun.write(tempFile, audioBuffer);
 
-  const volume = getVolumeSetting(requestVolume);
-
   return new Promise((resolve, reject) => {
-    // afplay -v takes a value from 0.0 to 1.0
-    const proc = spawn('/usr/bin/afplay', ['-v', volume.toString(), tempFile]);
+    const cleanup = () => {
+      try { unlinkSync(tempFile); } catch {}
+    };
 
-    proc.on('error', (error) => {
-      console.error('Error playing audio:', error);
-      reject(error);
-    });
+    if (IS_WINDOWS) {
+      // Try ffplay first (from ffmpeg — handles MP3)
+      const proc = spawn('ffplay', ['-nodisp', '-autoexit', '-volume', String(Math.round(volume * 100)), '-loglevel', 'quiet', tempFile], { windowsHide: true });
 
-    proc.on('exit', (code) => {
-      // Clean up temp file
-      spawn('/bin/rm', [tempFile]);
+      proc.on('error', () => {
+        // ffplay not found — try PowerShell as fallback
+        console.log('ffplay not found, trying PowerShell...');
+        const ps = spawn('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+          `Add-Type -AssemblyName presentationCore; $p = New-Object System.Windows.Media.MediaPlayer; $p.Open([Uri]'${tempFile.replace(/'/g, "''")}'); $p.Volume = ${volume}; $p.Play(); Start-Sleep -Seconds 10; $p.Close()`
+        ], { windowsHide: true });
+        ps.on('exit', (code) => { cleanup(); code === 0 ? resolve() : reject(new Error(`PowerShell player exited ${code}`)); });
+        ps.on('error', (err) => { cleanup(); reject(err); });
+      });
 
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(`afplay exited with code ${code}`));
-      }
-    });
-  });
-}
+      proc.on('exit', (code) => {
+        cleanup();
+        if (code === 0) resolve();
+        else reject(new Error(`ffplay exited with code ${code}`));
+      });
+    } else {
+      // macOS: afplay
+      const proc = spawn('/usr/bin/afplay', ['-v', volume.toString(), tempFile]);
 
-// Use macOS say command as fallback
-async function speakWithSay(text: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const proc = spawn('/usr/bin/say', [text]);
+      proc.on('error', (error) => {
+        console.error('Error playing audio:', error);
+        cleanup();
+        reject(error);
+      });
 
-    proc.on('error', (error) => {
-      console.error('Error with say command:', error);
-      reject(error);
-    });
-
-    proc.on('exit', (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(`say exited with code ${code}`));
-      }
-    });
+      proc.on('exit', (code) => {
+        cleanup();
+        if (code === 0) resolve();
+        else reject(new Error(`afplay exited with code ${code}`));
+      });
+    }
   });
 }
 
@@ -346,15 +259,60 @@ function spawnSafe(command: string, args: string[]): Promise<void> {
   });
 }
 
-// Send macOS notification with voice
+// ==========================================================================
+// Core: Send notification with TTS via provider + desktop notification
+// ==========================================================================
+
+/**
+ * Generate TTS audio via the configured provider and play it.
+ * Handles caching at the server level (wraps provider.generate()).
+ */
+async function generateAndPlayTTS(
+  text: string,
+  voiceId: string | null,
+  emotion: string | undefined,
+  volume: number,
+): Promise<void> {
+  const opts = {
+    text,
+    voiceId: voiceId || undefined,
+    emotion,
+    volume,
+  };
+
+  // Build cache key from provider
+  const cacheKey = provider.buildCacheKey(opts);
+  const cached = audioCache.get(text, provider.name, cacheKey.voiceId, cacheKey.extra);
+
+  let audioBuffer: Buffer;
+
+  if (cached) {
+    audioBuffer = cached;
+  } else {
+    const result = await provider.generate(opts);
+
+    // Empty buffer means provider played audio server-side (Qwen3 /notify fallback)
+    if (result.audio.length === 0) {
+      return;
+    }
+
+    audioCache.put(text, provider.name, cacheKey.voiceId, result.audio, result.format, cacheKey.extra);
+    audioBuffer = result.audio;
+  }
+
+  await playAudio(audioBuffer.buffer.slice(audioBuffer.byteOffset, audioBuffer.byteOffset + audioBuffer.byteLength), volume);
+}
+
+/**
+ * Send notification: TTS audio + desktop notification.
+ */
 async function sendNotification(
   title: string,
   message: string,
   voiceEnabled = true,
   voiceId: string | null = null,
-  requestProsody?: Partial<ProsodySettings>
+  volume: number = DEFAULT_VOLUME,
 ) {
-  // Validate and sanitize inputs
   const titleValidation = validateInput(title);
   const messageValidation = validateInput(message);
 
@@ -366,79 +324,44 @@ async function sendNotification(
     throw new Error(`Invalid message: ${messageValidation.error}`);
   }
 
-  // Use pre-sanitized values from validation
   const safeTitle = titleValidation.sanitized!;
-  let safeMessage = stripMarkers(messageValidation.sanitized!);
+  let safeMessage = messageValidation.sanitized!;
 
-  // Generate and play voice
+  // Preprocess: pronunciations then emotion extraction
+  const preprocessed = applyPronunciations(safeMessage);
+  const { cleaned, emotion } = extractEmotionalMarker(preprocessed);
+  safeMessage = cleaned;
+
+  // Generate and play voice via provider
   if (voiceEnabled) {
     try {
-      if (ELEVENLABS_API_KEY) {
-        const voice = voiceId || DEFAULT_VOICE_ID;
-
-        // Get voice configuration (personality settings)
-        const voiceConfig = getVoiceConfig(voice);
-
-        // Build prosody: request > voice config > DA config > defaults
-        let prosody: Partial<ProsodySettings> = {};
-
-        // First try voice config from AGENTPERSONALITIES.md
-        if (voiceConfig) {
-          if (voiceConfig.prosody) {
-            // New format: nested prosody object
-            prosody = voiceConfig.prosody;
-          } else {
-            // Legacy format: flat fields
-            prosody = {
-              stability: voiceConfig.stability,
-              similarity_boost: voiceConfig.similarity_boost,
-              style: voiceConfig.style ?? DEFAULT_PROSODY.style,
-              speed: voiceConfig.speed ?? DEFAULT_PROSODY.speed,
-              use_speaker_boost: voiceConfig.use_speaker_boost ?? DEFAULT_PROSODY.use_speaker_boost,
-            };
-          }
-          console.log(`Voice: ${voiceConfig.description}`);
-        } else if (voice === DEFAULT_VOICE_ID && daVoiceProsody) {
-          // Using DA's default voice - use prosody from settings.json
-          prosody = daVoiceProsody;
-          console.log(`Voice: DA default`);
-        }
-
-        // Request prosody overrides config prosody
-        if (requestProsody) {
-          prosody = { ...prosody, ...requestProsody };
-          console.log(`Using request prosody overrides`);
-        }
-
-        const settings = { ...DEFAULT_PROSODY, ...prosody };
-        const volume = (prosody as any)?.volume ?? daVoiceProsody?.volume;
-        console.log(`Generating speech (voice: ${voice}, stability: ${settings.stability}, style: ${settings.style}, speed: ${settings.speed}, volume: ${volume ?? 1.0})`);
-
-        const spokenMessage = applyPronunciations(safeMessage);
-        const audioBuffer = await generateSpeech(spokenMessage, voice, prosody);
-        await playAudio(audioBuffer, volume);
-      } else {
-        // Fallback to macOS say
-        console.log('Using macOS say (no API key)');
-        await speakWithSay(applyPronunciations(safeMessage));
-      }
+      await generateAndPlayTTS(safeMessage, voiceId, emotion, volume);
     } catch (error) {
       console.error("Failed to generate/play speech:", error);
-      // Try fallback to say command
-      try {
-        await speakWithSay(applyPronunciations(safeMessage));
-      } catch (sayError) {
-        console.error("Fallback say also failed:", sayError);
-      }
     }
   }
 
-  // Display macOS notification - escape for AppleScript
+  // Display desktop notification (platform-aware)
   try {
-    const escapedTitle = escapeForAppleScript(safeTitle);
-    const escapedMessage = escapeForAppleScript(safeMessage);
-    const script = `display notification "${escapedMessage}" with title "${escapedTitle}" sound name ""`;
-    await spawnSafe('/usr/bin/osascript', ['-e', script]);
+    if (IS_WINDOWS) {
+      // Windows toast notification via PowerShell
+      const escapedTitle = safeTitle.replace(/'/g, "''");
+      const escapedMessage = safeMessage.replace(/'/g, "''");
+      const psScript = `
+[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime] | Out-Null
+$xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+$xml.LoadXml("<toast><visual><binding template='ToastGeneric'><text>'${escapedTitle}'</text><text>'${escapedMessage}'</text></binding></visual></toast>")
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('PAI').Show([Windows.UI.Notifications.ToastNotification]::new($xml))
+`;
+      spawn('powershell', ['-NoProfile', '-NonInteractive', '-Command', psScript], { windowsHide: true });
+    } else {
+      // macOS notification
+      const escapedTitle = escapeForAppleScript(safeTitle);
+      const escapedMessage = escapeForAppleScript(safeMessage);
+      const script = `display notification "${escapedMessage}" with title "${escapedTitle}" sound name ""`;
+      await spawnSafe('/usr/bin/osascript', ['-e', script]);
+    }
   } catch (error) {
     console.error("Notification display error:", error);
   }
@@ -500,23 +423,16 @@ const server = serve({
         const title = data.title || "PAI Notification";
         const message = data.message || "Task completed";
         const voiceEnabled = data.voice_enabled !== false;
-        const voiceId = data.voice_id || data.voice_name || null; // Support both voice_id and voice_name
-
-        // Accept prosody settings directly in request (for custom agents)
-        // Also accept volume at top level for convenience
-        const voiceSettings: Partial<ProsodySettings> | undefined = data.voice_settings
-          ? { ...data.voice_settings, volume: data.volume ?? data.voice_settings.volume }
-          : data.volume !== undefined
-            ? { volume: data.volume }
-            : undefined;
+        const voiceId = data.voice_id || data.voice_name || null;
+        const volume = data.volume ?? DEFAULT_VOLUME;
 
         if (voiceId && typeof voiceId !== 'string') {
           throw new Error('Invalid voice_id');
         }
 
-        console.log(`Notification: "${title}" - "${message}" (voice: ${voiceEnabled}, voiceId: ${voiceId || DEFAULT_VOICE_ID})`);
+        console.log(`📨 Notification: "${title}" - "${message}" (voice: ${voiceEnabled}, provider: ${provider.name}, voiceId: ${voiceId || 'default'})`);
 
-        await sendNotification(title, message, voiceEnabled, voiceId, voiceSettings);
+        await sendNotification(title, message, voiceEnabled, voiceId, volume);
 
         return new Response(
           JSON.stringify({ status: "success", message: "Notification sent" }),
@@ -537,13 +453,42 @@ const server = serve({
       }
     }
 
+    // /notify/personality — compatibility shim
+    if (url.pathname === "/notify/personality" && req.method === "POST") {
+      try {
+        const data = await req.json();
+        const message = data.message || "Notification";
+
+        console.log(`🎭 Personality notification: "${message}"`);
+
+        await sendNotification("PAI Notification", message, true, null);
+
+        return new Response(
+          JSON.stringify({ status: "success", message: "Personality notification sent" }),
+          {
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+            status: 200
+          }
+        );
+      } catch (error: any) {
+        console.error("Personality notification error:", error);
+        return new Response(
+          JSON.stringify({ status: "error", message: error.message || "Internal server error" }),
+          {
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+            status: error.message?.includes('Invalid') ? 400 : 500
+          }
+        );
+      }
+    }
+
     if (url.pathname === "/pai" && req.method === "POST") {
       try {
         const data = await req.json();
         const title = data.title || "PAI Assistant";
         const message = data.message || "Task completed";
 
-        console.log(`PAI notification: "${title}" - "${message}"`);
+        console.log(`🤖 PAI notification: "${title}" - "${message}"`);
 
         await sendNotification(title, message, true, null);
 
@@ -566,14 +511,89 @@ const server = serve({
       }
     }
 
+    // Cache endpoints
+    if (url.pathname === "/cache/stats" && req.method === "GET") {
+      return new Response(JSON.stringify(audioCache.getStats()), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 200,
+      });
+    }
+
+    if (url.pathname === "/cache/clear" && req.method === "POST") {
+      const count = audioCache.clear();
+      return new Response(JSON.stringify({ cleared: count }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 200,
+      });
+    }
+
+    if (url.pathname === "/cache/pin" && req.method === "POST") {
+      try {
+        const data = await req.json();
+        const text = data.text;
+        if (!text || typeof text !== "string") {
+          return new Response(JSON.stringify({ status: "error", message: "text field required" }), {
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+            status: 400,
+          });
+        }
+        const success = audioCache.pin(text);
+        return new Response(JSON.stringify({ status: success ? "pinned" : "not_found", text: text.slice(0, 80) }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+          status: success ? 200 : 404,
+        });
+      } catch (e: any) {
+        return new Response(JSON.stringify({ status: "error", message: e.message }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+          status: 400,
+        });
+      }
+    }
+
+    if (url.pathname === "/cache/unpin" && req.method === "POST") {
+      try {
+        const data = await req.json();
+        const text = data.text;
+        if (!text || typeof text !== "string") {
+          return new Response(JSON.stringify({ status: "error", message: "text field required" }), {
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+            status: 400,
+          });
+        }
+        const success = audioCache.unpin(text);
+        return new Response(JSON.stringify({ status: success ? "unpinned" : "not_found", text: text.slice(0, 80) }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+          status: success ? 200 : 404,
+        });
+      } catch (e: any) {
+        return new Response(JSON.stringify({ status: "error", message: e.message }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+          status: 400,
+        });
+      }
+    }
+
+    if (url.pathname === "/cache/pinned" && req.method === "GET") {
+      return new Response(JSON.stringify(audioCache.listPinned()), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 200,
+      });
+    }
+
     if (url.pathname === "/health") {
+      const providerHealth = await provider.health();
+
       return new Response(
         JSON.stringify({
           status: "healthy",
           port: PORT,
-          voice_system: ELEVENLABS_API_KEY ? "ElevenLabs" : "macOS Say",
-          default_voice_id: DEFAULT_VOICE_ID,
-          api_key_configured: !!ELEVENLABS_API_KEY
+          platform: IS_WINDOWS ? "windows" : "unix",
+          provider: {
+            name: provider.name,
+            ...providerHealth,
+          },
+          cache: audioCache.getStats(),
+          pronunciation_rules: pronunciationRules.length,
         }),
         {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -582,15 +602,16 @@ const server = serve({
       );
     }
 
-    return new Response("Voice Server - POST to /notify or /pai", {
+    return new Response("Voice Server - POST to /notify, /notify/personality, or /pai", {
       headers: corsHeaders,
       status: 200
     });
   },
 });
 
-console.log(`Voice Server running on port ${PORT}`);
-console.log(`Using ${ELEVENLABS_API_KEY ? 'ElevenLabs' : 'macOS Say'} TTS (default voice: ${DEFAULT_VOICE_ID})`);
-console.log(`POST to http://localhost:${PORT}/notify`);
-console.log(`Security: CORS restricted to localhost, rate limiting enabled`);
-console.log(`API Key: ${ELEVENLABS_API_KEY ? 'Configured' : 'Not configured (using fallback)'}`);
+console.log(`🚀 Voice Server running on port ${PORT}`);
+console.log(`🔊 TTS Provider: ${provider.name}`);
+console.log(`📡 POST to http://localhost:${PORT}/notify`);
+console.log(`🔒 Security: CORS restricted to localhost, rate limiting enabled`);
+console.log(`📖 Pronunciations: ${pronunciationRules.length} rules loaded`);
+console.log(`💾 Cache: ${audioCache.getStats().enabled ? '✅ Enabled' : '❌ Disabled'} (${audioCache.getStats().entries} entries)`);
