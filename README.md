@@ -413,16 +413,12 @@ Open **Git Bash** (not PowerShell, not cmd.exe) and run:
 git clone https://github.com/chrisglick/Personal_AI_Infrastructure_Windows.git
 cd Personal_AI_Infrastructure_Windows/Releases/v4.0.3
 
-# 2. Run the installer directly from the cloned repo
-bash .claude/install.sh
+# 2. Copy the release and run the installer
+cp -r .claude ~/ && cd ~/.claude && bash install.sh
 ```
-
-> [!TIP]
-> **Do NOT manually copy `.claude/` to your home directory.** The installer handles all file placement, directory creation, and settings merging automatically. If you already have a `~/.claude/` directory (from Claude Code or a previous PAI install), the installer will detect it and merge — preserving your existing settings, hooks, and memory.
 
 The installer will:
 - Detect Windows and automatically use the CLI installer (no GUI/Electron)
-- Clone or update PAI files into `~/.claude/` (merging with any existing config)
 - Verify Git, Bun, and Claude Code are available
 - Walk you through identity setup (your name, AI name, timezone)
 - Configure `settings.json` (merging, not overwriting), create directory structure, set up shell alias

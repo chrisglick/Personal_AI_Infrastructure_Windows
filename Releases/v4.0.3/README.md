@@ -89,7 +89,7 @@ See the [main README's Windows section](../../README.md#windows-installation-exp
    ```bash
    git clone https://github.com/chrisglick/Personal_AI_Infrastructure_Windows.git
    cd Personal_AI_Infrastructure_Windows/Releases/v4.0.3
-   bash .claude/install.sh
+   cp -r .claude ~/ && cd ~/.claude && bash install.sh
    ```
 3. After install: `source ~/.bashrc && pai`
 
