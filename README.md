@@ -424,6 +424,14 @@ The installer will:
 - Configure `settings.json` (merging, not overwriting), create directory structure, set up shell alias
 - Optionally configure ElevenLabs voice (voice server auto-start is not available on Windows)
 
+#### Already Have Claude Code Running?
+
+If you already have Claude Code open, you can tell Claude to install PAI for you:
+
+> "Follow the guide at `Releases/v4.0.3/.claude/INSTALL_GUIDE_FOR_CLAUDE.md` in this repo to install PAI on my system."
+
+This uses a non-interactive install guide designed for AI agents — no manual terminal steps needed.
+
 #### After Installation
 
 ```bash

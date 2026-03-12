@@ -464,6 +464,16 @@ export async function runRepository(
       await emit({ event: "message", content: "Existing installation is not a git repo. Preserving current files." });
     }
   } else {
+    // Fresh install — check if files were already placed (e.g. via cp -r .claude ~/)
+    const alreadyPopulated =
+      existsSync(join(paiDir, "PAI")) &&
+      existsSync(join(paiDir, "install.sh")) &&
+      existsSync(join(paiDir, "hooks"));
+
+    if (alreadyPopulated) {
+      await emit({ event: "progress", step: "repository", percent: 80, detail: "PAI files already present, skipping clone." });
+      await emit({ event: "message", content: "PAI files detected from prior copy — skipping repository clone." });
+    } else {
     // Fresh install — clone repo
     await emit({ event: "progress", step: "repository", percent: 20, detail: "Cloning PAI repository..." });
 
@@ -526,6 +536,7 @@ export async function runRepository(
         }
       }
     }
+    } // end: else (not alreadyPopulated)
   }
 
   // Create required directories regardless of clone result
