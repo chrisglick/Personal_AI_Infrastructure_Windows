@@ -42,7 +42,7 @@ function getTerminalWidth(): number {
     } catch {}
   }
 
-  if (!width || width <= 0) {
+  if ((!width || width <= 0) && process.platform !== 'win32') {
     try {
       const result = spawnSync("sh", ["-c", "stty size </dev/tty 2>/dev/null"], { encoding: "utf-8" });
       if (result.stdout) {
@@ -52,7 +52,7 @@ function getTerminalWidth(): number {
     } catch {}
   }
 
-  if (!width || width <= 0) {
+  if ((!width || width <= 0) && process.platform !== 'win32') {
     try {
       const result = spawnSync("tput", ["cols"], { encoding: "utf-8" });
       if (result.stdout) {
@@ -160,7 +160,8 @@ function getStats(): SystemStats {
   } catch {}
 
   // Get platform info
-  const platform = process.platform === "darwin" ? "macOS" : process.platform;
+  const platformNames: Record<string, string> = { darwin: "macOS", win32: "Windows", linux: "Linux" };
+  const platform = platformNames[process.platform] || process.platform;
   const arch = process.arch;
 
   // Try to get Claude Code version

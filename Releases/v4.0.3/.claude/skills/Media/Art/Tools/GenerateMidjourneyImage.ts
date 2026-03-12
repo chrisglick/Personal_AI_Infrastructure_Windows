@@ -15,7 +15,8 @@
 import { DiscordBotClient } from '../lib/discord-bot.js';
 import { MidjourneyClient, MidjourneyError } from '../lib/midjourney-client.js';
 import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { resolve, join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 // ============================================================================
 // Environment Loading
@@ -79,7 +80,7 @@ const DEFAULTS = {
   stylize: parseInt(process.env.MIDJOURNEY_DEFAULT_STYLIZE || '100'),
   quality: parseInt(process.env.MIDJOURNEY_DEFAULT_QUALITY || '1'),
   tile: false,
-  output: '/tmp/midjourney-image.png',
+  output: join(tmpdir(), 'midjourney-image.png'),
   timeout: 120,
 };
 

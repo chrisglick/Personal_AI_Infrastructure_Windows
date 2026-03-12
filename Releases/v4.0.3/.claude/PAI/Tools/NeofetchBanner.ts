@@ -52,8 +52,8 @@ function getTerminalWidth(): number {
     } catch {}
   }
 
-  // Tier 2: Direct TTY query
-  if (!width || width <= 0) {
+  // Tier 2: Direct TTY query (Unix only — stty not available on Windows)
+  if ((!width || width <= 0) && process.platform !== 'win32') {
     try {
       const result = spawnSync("sh", ["-c", "stty size </dev/tty 2>/dev/null"], {
         encoding: "utf-8"
@@ -65,8 +65,8 @@ function getTerminalWidth(): number {
     } catch {}
   }
 
-  // Tier 3: tput fallback
-  if (!width || width <= 0) {
+  // Tier 3: tput fallback (Unix only)
+  if ((!width || width <= 0) && process.platform !== 'win32') {
     try {
       const result = spawnSync("tput", ["cols"], { encoding: "utf-8" });
       if (result.stdout) {

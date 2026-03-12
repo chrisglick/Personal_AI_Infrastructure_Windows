@@ -203,7 +203,7 @@ fi
 # This section launches everything in parallel BEFORE any sequential work.
 # Results are collected via temp files and sourced later.
 
-_parallel_tmp="/tmp/pai-parallel-$$"
+_parallel_tmp="${TMPDIR:-${TMP:-/tmp}}/pai-parallel-$$"
 mkdir -p "$_parallel_tmp"
 
 # --- PARALLEL BLOCK START ---
@@ -414,7 +414,7 @@ learning_count="$learnings_count"
 # ─────────────────────────────────────────────────────────────────────────────
 # Hooks don't inherit terminal context. Try multiple methods.
 
-_width_cache="/tmp/pai-term-width-${KITTY_WINDOW_ID:-default}"
+_width_cache="${TMPDIR:-${TMP:-/tmp}}/pai-term-width-${KITTY_WINDOW_ID:-default}"
 
 detect_terminal_width() {
     local width=""

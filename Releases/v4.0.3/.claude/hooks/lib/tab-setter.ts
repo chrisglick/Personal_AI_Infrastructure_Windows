@@ -10,6 +10,7 @@
 
 import { existsSync, writeFileSync, mkdirSync, readdirSync, unlinkSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { tmpdir } from 'os';
 import { execSync } from 'child_process';
 import { TAB_COLORS, PHASE_TAB_CONFIG, ACTIVE_TAB_BG, ACTIVE_TAB_FG, INACTIVE_TAB_FG, type TabState, type AlgorithmTabPhase } from './tab-constants';
 import { paiPath } from './paths';
@@ -52,7 +53,7 @@ function getKittyEnv(sessionId?: string): { listenOn: string | null; windowId: s
   // This prevents escape-sequence IPC when KITTY_LISTEN_ON isn't propagated
   // to subprocess contexts (the root cause of terminal garbage in #493).
   if (!listenOn) {
-    const defaultSocket = `/tmp/kitty-${process.env.USER}`;
+    const defaultSocket = join(tmpdir(), `kitty-${process.env.USER || process.env.USERNAME || 'user'}`);
     try {
       if (existsSync(defaultSocket)) {
         listenOn = `unix:${defaultSocket}`;
@@ -113,12 +114,13 @@ interface SetTabOptions {
  */
 function cleanupStaleStateFiles(): void {
   try {
+    if (process.platform === 'win32') return; // Kitty cleanup is Unix-only
     if (!existsSync(TAB_TITLES_DIR)) return;
     const files = readdirSync(TAB_TITLES_DIR).filter(f => f.endsWith('.json'));
     if (files.length === 0) return;
 
     // Get live window IDs from kitty via socket (prevents escape sequence leaks)
-    const defaultSocket = `/tmp/kitty-${process.env.USER}`;
+    const defaultSocket = join(tmpdir(), `kitty-${process.env.USER || process.env.USERNAME || 'user'}`);
     const socketPath = process.env.KITTY_LISTEN_ON || (existsSync(defaultSocket) ? `unix:${defaultSocket}` : null);
     if (!socketPath) return; // No socket — skip cleanup to avoid escape sequence IPC
     const liveOutput = execSync(`kitten @ --to="${socketPath}" ls 2>/dev/null | jq -r ".[].tabs[].windows[].id" 2>/dev/null`, {

@@ -34,8 +34,8 @@
  *   caused silent failures with large piped inputs
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, rmdirSync, renameSync, statSync } from 'fs';
-import { dirname } from 'path';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmdirSync, renameSync, statSync, readdirSync } from 'fs';
+import { dirname, join } from 'path';
 import { spawn as nodeSpawn } from 'child_process';
 import { paiPath } from './lib/paths';
 import { inference } from '../PAI/Tools/Inference';
@@ -265,11 +265,22 @@ function getCustomTitle(sessionId: string): string | null {
       if (!existsSync(projectsDir)) continue;
 
       // Find the session's JSONL file under any project subdir (maxdepth 2)
-      const findResult = Bun.spawnSync(
-        ['find', projectsDir, '-maxdepth', '2', '-name', `${sessionId}.jsonl`],
-        { stdout: 'pipe', stderr: 'pipe', timeout: 2000 },
-      );
-      const jsonlPath = findResult.stdout.toString().trim().split('\n')[0];
+      // Uses pure JS instead of Unix `find` for cross-platform support
+      const targetName = `${sessionId}.jsonl`;
+      let jsonlPath: string | null = null;
+      try {
+        for (const subdir of readdirSync(projectsDir, { withFileTypes: true })) {
+          if (!subdir.isDirectory()) continue;
+          const subdirPath = join(projectsDir, subdir.name);
+          for (const file of readdirSync(subdirPath, { withFileTypes: true })) {
+            if (file.isFile() && file.name === targetName) {
+              jsonlPath = join(subdirPath, file.name);
+              break;
+            }
+          }
+          if (jsonlPath) break;
+        }
+      } catch {}
       if (!jsonlPath || !existsSync(jsonlPath)) continue;
 
       // Scan JSONL for last custom-title entry (written by /rename)

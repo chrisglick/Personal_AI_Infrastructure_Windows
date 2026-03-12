@@ -20,7 +20,7 @@
 
 import { spawn, spawnSync } from "bun";
 import { getDAName, getIdentity } from "../../hooks/lib/identity";
-import { existsSync, readFileSync, writeFileSync, readdirSync, symlinkSync, unlinkSync, lstatSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, readdirSync, symlinkSync, unlinkSync, lstatSync, realpathSync } from "fs";
 import { homedir } from "os";
 import { join, basename } from "path";
 
@@ -184,7 +184,7 @@ function getCurrentProfile(): string | null {
     if (stats.isSymbolicLink()) {
       const target = readFileSync(ACTIVE_MCP, "utf-8");
       // For symlink, we need the real target name
-      const realpath = Bun.spawnSync(["readlink", ACTIVE_MCP]).stdout.toString().trim();
+      const realpath = realpathSync(ACTIVE_MCP);
       return basename(realpath).replace(".mcp.json", "");
     }
     return "custom";
@@ -312,31 +312,48 @@ function setWallpaper(filename: string): boolean {
 
   let success = true;
 
-  // Set Kitty background
-  try {
-    const kittyResult = spawnSync(["kitty", "@", "set-background-image", fullPath]);
-    if (kittyResult.exitCode === 0) {
-      log("Kitty background set", "✅");
-    } else {
-      log("Failed to set Kitty background", "⚠️");
-      success = false;
+  // Set Kitty background (Unix only — Kitty doesn't run on Windows)
+  if (process.platform !== 'win32') {
+    try {
+      const kittyResult = spawnSync(["kitty", "@", "set-background-image", fullPath]);
+      if (kittyResult.exitCode === 0) {
+        log("Kitty background set", "✅");
+      } else {
+        log("Failed to set Kitty background", "⚠️");
+        success = false;
+      }
+    } catch {
+      log("Kitty not available", "⚠️");
     }
-  } catch {
-    log("Kitty not available", "⚠️");
   }
 
-  // Set macOS desktop background
-  try {
-    const script = `tell application "System Events" to tell every desktop to set picture to "${fullPath}"`;
-    const macResult = spawnSync(["osascript", "-e", script]);
-    if (macResult.exitCode === 0) {
-      log("macOS desktop set", "✅");
-    } else {
-      log("Failed to set macOS desktop", "⚠️");
-      success = false;
+  // Set desktop background (platform-specific)
+  if (process.platform === 'darwin') {
+    try {
+      const script = `tell application "System Events" to tell every desktop to set picture to "${fullPath}"`;
+      const macResult = spawnSync(["osascript", "-e", script]);
+      if (macResult.exitCode === 0) {
+        log("macOS desktop set", "✅");
+      } else {
+        log("Failed to set macOS desktop", "⚠️");
+        success = false;
+      }
+    } catch {
+      log("Could not set macOS desktop", "⚠️");
     }
-  } catch {
-    log("Could not set macOS desktop", "⚠️");
+  } else if (process.platform === 'win32') {
+    try {
+      const ps = `Add-Type -TypeDefinition 'using System.Runtime.InteropServices; public class Wallpaper { [DllImport("user32.dll", CharSet=CharSet.Auto)] public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni); }'; [Wallpaper]::SystemParametersInfo(0x0014, 0, '${fullPath.replace(/'/g, "''")}', 0x01 -bor 0x02)`;
+      const winResult = spawnSync(["powershell.exe", "-NoProfile", "-Command", ps]);
+      if (winResult.exitCode === 0) {
+        log("Windows desktop set", "✅");
+      } else {
+        log("Failed to set Windows desktop", "⚠️");
+        success = false;
+      }
+    } catch {
+      log("Could not set Windows desktop", "⚠️");
+    }
   }
 
   return success;
@@ -455,18 +472,36 @@ async function cmdUpdate() {
 
   // Step 1: Update Bun
   log("Step 1/2: Updating Bun...", "📦");
-  const bunResult = spawnSync(["brew", "upgrade", "bun"]);
-  if (bunResult.exitCode !== 0) {
-    log("Bun update skipped (may already be latest)", "⚠️");
+  if (process.platform === 'win32') {
+    const bunResult = spawnSync(["powershell.exe", "-NoProfile", "-Command", "bun upgrade"]);
+    if (bunResult.exitCode !== 0) {
+      log("Bun update skipped (may already be latest)", "⚠️");
+    } else {
+      log("Bun updated", "✅");
+    }
   } else {
-    log("Bun updated", "✅");
+    const bunResult = spawnSync(["brew", "upgrade", "bun"]);
+    if (bunResult.exitCode !== 0) {
+      log("Bun update skipped (may already be latest)", "⚠️");
+    } else {
+      log("Bun updated", "✅");
+    }
   }
 
   // Step 2: Update Claude Code
   log("Step 2/2: Installing latest Claude Code...", "🤖");
-  const claudeResult = spawnSync(["bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash"]);
-  if (claudeResult.exitCode !== 0) {
-    error("Claude Code installation failed");
+  if (process.platform === 'win32') {
+    const claudeResult = spawnSync(["powershell.exe", "-NoProfile", "-Command", "irm https://claude.ai/install.ps1 | iex"]);
+    if (claudeResult.exitCode !== 0) {
+      // Fallback: try npm
+      const npmResult = spawnSync(["npm", "install", "-g", "@anthropic-ai/claude-code"]);
+      if (npmResult.exitCode !== 0) error("Claude Code installation failed");
+    }
+  } else {
+    const claudeResult = spawnSync(["bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash"]);
+    if (claudeResult.exitCode !== 0) {
+      error("Claude Code installation failed");
+    }
   }
   log("Claude Code updated", "✅");
 

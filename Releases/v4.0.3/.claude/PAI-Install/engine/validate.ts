@@ -167,20 +167,57 @@ export async function runValidation(state: InstallState): Promise<ValidationChec
     critical: false,
   });
 
-  // 8. Zsh alias configured
-  const zshrcPath = join(homedir(), ".zshrc");
+  // 8. Shell alias configured
   let aliasConfigured = false;
-  if (existsSync(zshrcPath)) {
-    try {
-      const zshContent = readFileSync(zshrcPath, "utf-8");
-      aliasConfigured = zshContent.includes("# PAI alias") && zshContent.includes("alias pai=");
-    } catch {}
+  let aliasDetail = "";
+
+  if (process.platform === "win32") {
+    // Check PowerShell profiles (5.1 = WindowsPowerShell, 7+ = PowerShell)
+    const psProfilePaths = [
+      join(homedir(), "Documents", "WindowsPowerShell", "Microsoft.PowerShell_profile.ps1"),
+      join(homedir(), "Documents", "PowerShell", "Microsoft.PowerShell_profile.ps1"),
+    ];
+    let psConfigured = false;
+    for (const psProfilePath of psProfilePaths) {
+      if (existsSync(psProfilePath)) {
+        try {
+          const psContent = readFileSync(psProfilePath, "utf-8");
+          if (psContent.includes("# PAI alias") && psContent.includes("function pai")) {
+            psConfigured = true;
+            break;
+          }
+        } catch {}
+      }
+    }
+
+    // Check .bashrc for Git Bash
+    const bashrcPath = join(homedir(), ".bashrc");
+    let bashConfigured = false;
+    if (existsSync(bashrcPath)) {
+      try {
+        const bashContent = readFileSync(bashrcPath, "utf-8");
+        bashConfigured = bashContent.includes("# PAI alias") && bashContent.includes("alias pai=");
+      } catch {}
+    }
+
+    aliasConfigured = psConfigured || bashConfigured;
+    const shells = [psConfigured && "PowerShell", bashConfigured && "Git Bash"].filter(Boolean).join(" + ");
+    aliasDetail = aliasConfigured ? `Configured in ${shells}` : "Not found — re-run installer";
+  } else {
+    const zshrcPath = join(homedir(), ".zshrc");
+    if (existsSync(zshrcPath)) {
+      try {
+        const zshContent = readFileSync(zshrcPath, "utf-8");
+        aliasConfigured = zshContent.includes("# PAI alias") && zshContent.includes("alias pai=");
+      } catch {}
+    }
+    aliasDetail = aliasConfigured ? "Configured in .zshrc" : "Not found — run: source ~/.zshrc";
   }
 
   checks.push({
     name: "Shell alias (pai)",
     passed: aliasConfigured,
-    detail: aliasConfigured ? "Configured in .zshrc" : "Not found — run: source ~/.zshrc",
+    detail: aliasDetail,
     critical: true,
   });
 

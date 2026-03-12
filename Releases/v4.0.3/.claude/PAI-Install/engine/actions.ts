@@ -188,8 +188,13 @@ async function migrateUserContext(
     // Replace legacy dir with symlink so skill-relative paths still work
     try {
       rmSync(legacyDir, { recursive: true });
-      // Symlink target is relative: from skills/PAI/ or skills/CORE/ → ../../PAI/USER
-      symlinkSync(join("..", "..", "PAI", "USER"), legacyDir);
+      if (process.platform === "win32") {
+        // On Windows, create a junction instead of symlink (no admin required)
+        tryExec(`cmd /c mklink /J "${legacyDir}" "${join(paiDir, "PAI", "USER")}"`, 5000);
+      } else {
+        // Symlink target is relative: from skills/PAI/ or skills/CORE/ → ../../PAI/USER
+        symlinkSync(join("..", "..", "PAI", "USER"), legacyDir);
+      }
       await emit({ event: "message", content: `Replaced ${label} with symlink to PAI/USER.` });
     } catch {
       await emit({ event: "message", content: `Could not replace ${label} with symlink. User files were copied but old directory remains.` });
@@ -674,40 +679,95 @@ export async function runConfiguration(
             continue; // Don't overwrite a real file
           }
         }
-        symlinkSync(envPath, symlinkPath);
+        if (process.platform === "win32") {
+          // Copy instead of symlink on Windows (symlinks require admin)
+          cpSync(envPath, symlinkPath);
+        } else {
+          symlinkSync(envPath, symlinkPath);
+        }
       } catch {
         // Permission error or path conflict
       }
     }
   }
 
-  // Set up shell alias (detect bash/zsh/fish)
+  // Set up shell alias
   await emit({ event: "progress", step: "configuration", percent: 80, detail: "Setting up shell alias..." });
 
-  const userShell = process.env.SHELL || "/bin/zsh";
-  const rcFile = userShell.includes("bash") ? ".bashrc" : userShell.includes("fish") ? ".config/fish/config.fish" : ".zshrc";
-  const rcPath = join(homedir(), rcFile);
-  const aliasLine = `alias pai='bun ${join(paiDir, "PAI", "Tools", "pai.ts")}'`;
-  const marker = "# PAI alias";
+  // Helper: write a bash/zsh/fish alias to an rc file
+  const writeBashAlias = (rcPath: string) => {
+    const aliasLine = `alias pai='bun ${join(paiDir, "PAI", "Tools", "pai.ts")}'`;
+    const marker = "# PAI alias";
 
-  if (existsSync(rcPath)) {
-    let content = readFileSync(rcPath, "utf-8");
-    // Remove any existing pai alias (old CORE or PAI paths, any marker variant)
-    content = content.replace(/^#\s*(?:PAI|CORE)\s*alias.*\n.*alias pai=.*\n?/gm, "");
-    content = content.replace(/^alias pai=.*\n?/gm, "");
-    // Add fresh alias
-    content = content.trimEnd() + `\n\n${marker}\n${aliasLine}\n`;
-    writeFileSync(rcPath, content);
+    if (existsSync(rcPath)) {
+      let content = readFileSync(rcPath, "utf-8");
+      content = content.replace(/^#\s*(?:PAI|CORE)\s*alias.*\n.*alias pai=.*\n?/gm, "");
+      content = content.replace(/^alias pai=.*\n?/gm, "");
+      content = content.trimEnd() + `\n\n${marker}\n${aliasLine}\n`;
+      writeFileSync(rcPath, content);
+    } else {
+      writeFileSync(rcPath, `${marker}\n${aliasLine}\n`);
+    }
+  };
+
+  if (process.platform === "win32") {
+    // On Windows, write PowerShell function to both PS 5.1 and PS 7+ profiles
+    const psProfileDirs = [
+      join(homedir(), "Documents", "WindowsPowerShell"),  // Windows PowerShell 5.1
+      join(homedir(), "Documents", "PowerShell"),          // PowerShell 7+ (Core)
+    ];
+    const psAliasLine = `function pai { bun "${join(paiDir, "PAI", "Tools", "pai.ts")}" @args }`;
+    const marker = "# PAI alias";
+    let anyPsConfigured = false;
+
+    for (const profileDir of psProfileDirs) {
+      const profilePath = join(profileDir, "Microsoft.PowerShell_profile.ps1");
+      try {
+        if (!existsSync(profileDir)) mkdirSync(profileDir, { recursive: true });
+        if (existsSync(profilePath)) {
+          let content = readFileSync(profilePath, "utf-8");
+          content = content.replace(/^#\s*PAI\s*alias.*\nfunction pai.*\n?/gm, "");
+          content = content.trimEnd() + `\n\n${marker}\n${psAliasLine}\n`;
+          writeFileSync(profilePath, content);
+        } else {
+          writeFileSync(profilePath, `${marker}\n${psAliasLine}\n`);
+        }
+        anyPsConfigured = true;
+      } catch {
+        // Non-fatal — try the next profile location
+      }
+    }
+
+    if (anyPsConfigured) {
+      await emit({ event: "message", content: "PowerShell alias 'pai' configured." });
+    } else {
+      await emit({ event: "message", content: "Could not set up PowerShell alias. You can add it manually." });
+    }
+
+    // Also write bash alias for Git Bash / MSYS2 / WSL users
+    try {
+      const bashrcPath = join(homedir(), ".bashrc");
+      writeBashAlias(bashrcPath);
+      await emit({ event: "message", content: "Git Bash alias 'pai' configured in .bashrc." });
+    } catch {
+      await emit({ event: "message", content: "Could not set up Git Bash alias. You can add it manually to ~/.bashrc." });
+    }
   } else {
-    writeFileSync(rcPath, `${marker}\n${aliasLine}\n`);
+    // Unix shell alias (detect bash/zsh/fish)
+    const userShell = process.env.SHELL || "/bin/zsh";
+    const rcFile = userShell.includes("bash") ? ".bashrc" : userShell.includes("fish") ? ".config/fish/config.fish" : ".zshrc";
+    const rcPath = join(homedir(), rcFile);
+    writeBashAlias(rcPath);
   }
 
-  // Fix permissions
-  await emit({ event: "progress", step: "configuration", percent: 90, detail: "Setting permissions..." });
-  try {
-    tryExec(`chmod -R 755 "${paiDir}"`, 10000);
-  } catch {
-    // Non-fatal
+  // Fix permissions (Unix only — Windows uses NTFS ACLs)
+  if (process.platform !== "win32") {
+    await emit({ event: "progress", step: "configuration", percent: 90, detail: "Setting permissions..." });
+    try {
+      tryExec(`chmod -R 755 "${paiDir}"`, 10000);
+    } catch {
+      // Non-fatal
+    }
   }
 
   await emit({ event: "progress", step: "configuration", percent: 100, detail: "Configuration complete" });
@@ -738,12 +798,18 @@ async function stopVoiceServer(emit: EngineEventHandler): Promise<void> {
   }
 
   // Kill the process LISTENING on port 8888 (not clients connected to it — that would kill us!)
-  tryExec(`lsof -ti:8888 -sTCP:LISTEN | xargs kill -9 2>/dev/null`, 5000);
+  if (process.platform === "win32") {
+    tryExec(`powershell.exe -NoProfile -Command "Get-NetTCPConnection -LocalPort 8888 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }"`, 5000);
+  } else {
+    tryExec(`lsof -ti:8888 -sTCP:LISTEN | xargs kill -9 2>/dev/null`, 5000);
+  }
 
-  // Unload existing LaunchAgent if present
-  const plistPath = join(homedir(), "Library", "LaunchAgents", "com.pai.voice-server.plist");
-  if (existsSync(plistPath)) {
-    tryExec(`launchctl unload "${plistPath}" 2>/dev/null`, 5000);
+  // Unload existing LaunchAgent if present (macOS only)
+  if (process.platform === "darwin") {
+    const plistPath = join(homedir(), "Library", "LaunchAgents", "com.pai.voice-server.plist");
+    if (existsSync(plistPath)) {
+      tryExec(`launchctl unload "${plistPath}" 2>/dev/null`, 5000);
+    }
   }
 
   // Wait for it to actually stop

@@ -16,7 +16,7 @@
 
 import { serve } from "bun";
 import { spawn } from "child_process";
-import { homedir } from "os";
+import { homedir, tmpdir } from "os";
 import { join } from "path";
 import { existsSync, readFileSync } from "fs";
 
@@ -369,28 +369,50 @@ async function generateSpeech(
   return await response.arrayBuffer();
 }
 
-// Play audio using afplay (macOS)
+// Play audio cross-platform (macOS: afplay, Linux: paplay/ffplay, Windows: PowerShell MediaPlayer)
 async function playAudio(audioBuffer: ArrayBuffer, volume: number = FALLBACK_VOLUME): Promise<void> {
-  const tempFile = `/tmp/voice-${Date.now()}.mp3`;
+  const tempFile = join(tmpdir(), `voice-${Date.now()}.mp3`);
 
   await Bun.write(tempFile, audioBuffer);
 
+  const cleanup = () => { try { require('fs').unlinkSync(tempFile); } catch {} };
+
+  if (process.platform === 'darwin') {
+    return new Promise((resolve, reject) => {
+      const proc = spawn('/usr/bin/afplay', ['-v', volume.toString(), tempFile]);
+      proc.on('error', (error) => { console.error('Error playing audio:', error); reject(error); });
+      proc.on('exit', (code) => { cleanup(); code === 0 ? resolve() : reject(new Error(`afplay exited with code ${code}`)); });
+    });
+  }
+
+  if (process.platform === 'win32') {
+    const ps = [
+      `Add-Type -AssemblyName PresentationCore`,
+      `$p = New-Object System.Windows.Media.MediaPlayer`,
+      `$p.Open([Uri]::new('${tempFile.replace(/\\/g, '/').replace(/'/g, "''")}'))`,
+      `$p.Volume = ${volume}`,
+      `Start-Sleep -Milliseconds 300`,
+      `$p.Play()`,
+      `while(-not $p.NaturalDuration.HasTimeSpan){Start-Sleep -Milliseconds 100}`,
+      `Start-Sleep -Milliseconds ([math]::Ceiling($p.NaturalDuration.TimeSpan.TotalMilliseconds))`,
+      `$p.Close()`,
+    ].join('; ');
+    return new Promise((resolve, reject) => {
+      const proc = spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-sta', '-Command', ps]);
+      proc.on('error', (error) => { console.error('Error playing audio:', error); reject(error); });
+      proc.on('exit', (code) => { cleanup(); code === 0 ? resolve() : reject(new Error(`PowerShell audio exited with code ${code}`)); });
+    });
+  }
+
+  // Linux: try ffplay, fall back to paplay
   return new Promise((resolve, reject) => {
-    const proc = spawn('/usr/bin/afplay', ['-v', volume.toString(), tempFile]);
-
-    proc.on('error', (error) => {
-      console.error('Error playing audio:', error);
-      reject(error);
+    const proc = spawn('ffplay', ['-nodisp', '-autoexit', '-volume', String(Math.round(volume * 100)), tempFile]);
+    proc.on('error', () => {
+      const fallback = spawn('paplay', [tempFile]);
+      fallback.on('error', (error) => { console.error('Error playing audio:', error); cleanup(); reject(error); });
+      fallback.on('exit', (code) => { cleanup(); code === 0 ? resolve() : reject(new Error(`paplay exited with code ${code}`)); });
     });
-
-    proc.on('exit', (code) => {
-      spawn('/bin/rm', [tempFile]);
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(`afplay exited with code ${code}`));
-      }
-    });
+    proc.on('exit', (code) => { cleanup(); code === 0 ? resolve() : reject(new Error(`ffplay exited with code ${code}`)); });
   });
 }
 
@@ -512,13 +534,20 @@ async function sendNotification(
     }
   }
 
-  // Display macOS notification (can be disabled via settings.json: notifications.desktop.enabled: false)
+  // Display desktop notification (can be disabled via settings.json: notifications.desktop.enabled: false)
   if (voiceConfig.desktopNotifications) {
     try {
-      const escapedTitle = escapeForAppleScript(safeTitle);
-      const escapedMessage = escapeForAppleScript(safeMessage);
-      const script = `display notification "${escapedMessage}" with title "${escapedTitle}" sound name ""`;
-      await spawnSafe('/usr/bin/osascript', ['-e', script]);
+      if (process.platform === 'darwin') {
+        const escapedTitle = escapeForAppleScript(safeTitle);
+        const escapedMessage = escapeForAppleScript(safeMessage);
+        const script = `display notification "${escapedMessage}" with title "${escapedTitle}" sound name ""`;
+        await spawnSafe('/usr/bin/osascript', ['-e', script]);
+      } else if (process.platform === 'win32') {
+        const ps = `[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null; $xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02); $text = $xml.GetElementsByTagName('text'); $text[0].AppendChild($xml.CreateTextNode('${safeTitle.replace(/'/g, "''")}')) | Out-Null; $text[1].AppendChild($xml.CreateTextNode('${safeMessage.replace(/'/g, "''")}')) | Out-Null; [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('PAI').Show([Windows.UI.Notifications.ToastNotification]::new($xml))`;
+        await spawnSafe('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', ps]);
+      } else {
+        await spawnSafe('notify-send', [safeTitle, safeMessage]);
+      }
     } catch (error) {
       console.error("Notification display error:", error);
     }

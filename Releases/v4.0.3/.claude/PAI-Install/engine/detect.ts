@@ -21,7 +21,9 @@ function tryExec(cmd: string): string | null {
 }
 
 function detectOS(): DetectionResult["os"] {
-  const platform = process.platform === "darwin" ? "darwin" : "linux";
+  const platform = process.platform === "darwin" ? "darwin"
+    : process.platform === "win32" ? "win32"
+    : "linux";
   const arch = process.arch;
 
   let version = "";
@@ -31,6 +33,10 @@ function detectOS(): DetectionResult["os"] {
     const swVers = tryExec("sw_vers -productVersion");
     version = swVers || "";
     name = `macOS ${version}`;
+  } else if (platform === "win32") {
+    const ver = tryExec('powershell.exe -NoProfile -Command "[System.Environment]::OSVersion.VersionString"');
+    version = ver || "";
+    name = `Windows ${version}`;
   } else {
     const release = tryExec("cat /etc/os-release 2>/dev/null | grep PRETTY_NAME | cut -d= -f2 | tr -d '\"'");
     name = release || "Linux";
@@ -41,10 +47,12 @@ function detectOS(): DetectionResult["os"] {
 }
 
 function detectShell(): DetectionResult["shell"] {
-  const shellPath = process.env.SHELL || "/bin/sh";
-  const shellName = shellPath.split("/").pop() || "sh";
+  const isWin = process.platform === "win32";
+  const shellPath = isWin
+    ? (process.env.SHELL || "bash")  // Git Bash sets SHELL
+    : (process.env.SHELL || "/bin/sh");
+  const shellName = shellPath.split(/[/\\]/).pop() || (isWin ? "bash" : "sh");
   const version = tryExec(`${shellPath} --version 2>&1 | head -1`) || "";
-
   return { name: shellName, version, path: shellPath };
 }
 
@@ -52,7 +60,8 @@ function detectTool(
   name: string,
   versionCmd: string
 ): { installed: boolean; version?: string; path?: string } {
-  const path = tryExec(`which ${name}`);
+  const whichCmd = process.platform === "win32" ? `where ${name} 2>NUL` : `which ${name}`;
+  const path = tryExec(whichCmd);
   if (!path) return { installed: false };
 
   const versionOutput = tryExec(versionCmd);
@@ -60,7 +69,9 @@ function detectTool(
   const versionMatch = versionOutput?.match(/(\d+\.\d+[\.\d]*)/);
   const version = versionMatch?.[1] || versionOutput || undefined;
 
-  return { installed: true, version, path };
+  // On Windows, `where` can return multiple lines — take just the first
+  const firstPath = path.split('\n')[0].trim();
+  return { installed: true, version, path: firstPath };
 }
 
 function detectExisting(
@@ -137,10 +148,12 @@ export function detectSystem(): DetectionResult {
       git: detectTool("git", "git --version"),
       claude: detectTool("claude", "claude --version 2>&1"),
       node: detectTool("node", "node --version"),
-      brew: {
-        installed: tryExec("which brew") !== null,
-        path: tryExec("which brew") || undefined,
-      },
+      brew: process.platform === "win32"
+        ? { installed: false }
+        : {
+            installed: tryExec("which brew") !== null,
+            path: tryExec("which brew") || undefined,
+          },
     },
     existing: detectExisting(home, paiDir, configDir),
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,

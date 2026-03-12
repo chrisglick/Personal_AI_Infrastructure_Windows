@@ -74,6 +74,7 @@ ARCH="$(uname -m)"
 case "$OS" in
   Darwin) info "Platform: macOS ($ARCH)" ;;
   Linux)  info "Platform: Linux ($ARCH)" ;;
+  MINGW*|MSYS*|CYGWIN*) info "Platform: Windows ($ARCH via Git Bash)" ;;
   *)      error "Unsupported platform: $OS"; exit 1 ;;
 esac
 
@@ -105,6 +106,8 @@ else
     elif command -v yum &>/dev/null; then
       sudo yum install -y git 2>/dev/null || warn "Could not install Git"
     fi
+  elif [[ "$OS" == MINGW* || "$OS" == MSYS* || "$OS" == CYGWIN* ]]; then
+    warn "Please install Git for Windows: https://git-scm.com/download/win"
   fi
 
   if command -v git &>/dev/null; then
@@ -119,10 +122,14 @@ if command -v bun &>/dev/null; then
   success "Bun found: v$(bun --version 2>/dev/null || echo 'unknown')"
 else
   info "Installing Bun runtime..."
-  curl -fsSL https://bun.sh/install | bash 2>/dev/null
-
-  # Add to PATH for this session
-  export PATH="$HOME/.bun/bin:$PATH"
+  if [[ "$OS" == MINGW* || "$OS" == MSYS* || "$OS" == CYGWIN* ]]; then
+    powershell.exe -ExecutionPolicy Bypass -c "irm bun.sh/install.ps1 | iex" 2>/dev/null
+    # Add common Windows bun location to PATH
+    export PATH="$USERPROFILE/.bun/bin:$HOME/.bun/bin:$PATH"
+  else
+    curl -fsSL https://bun.sh/install | bash 2>/dev/null
+    export PATH="$HOME/.bun/bin:$PATH"
+  fi
 
   if command -v bun &>/dev/null; then
     success "Bun installed: v$(bun --version 2>/dev/null || echo 'unknown')"
