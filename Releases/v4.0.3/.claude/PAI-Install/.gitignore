@@ -66,16 +66,3 @@ credentials/
 .claude/pai_updates/
 .claude/pai_backups/
 .claude/.pai-sync-history
-
-# Installer test artifacts (cloned PAI repo nested inside itself)
-.claude/
-.github/
-.pai-protected.json
-.gitattributes
-.env.example
-Releases/
-Tools/
-images/
-LICENSE
-SECURITY.md
-PLATFORM.md
