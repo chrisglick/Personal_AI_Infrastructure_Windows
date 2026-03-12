@@ -383,6 +383,99 @@ bun ~/.claude/PAI/Tools/BuildCLAUDE.ts
 - [ ] Test voice notifications (if enabled)
 - [ ] Run a simple prompt to confirm PAI responds correctly
 
+### Windows Installation (Experimental)
+
+> [!NOTE]
+> Windows support is experimental. The installer and hooks have been patched for Windows compatibility, but some features (voice server auto-start, LaunchAgent) are macOS/Linux only. The core PAI experience — skills, memory, hooks, and the Algorithm — works on Windows.
+
+#### Prerequisites
+
+You need these installed **before** running the PAI installer:
+
+| Tool | How to Install | Why |
+|------|---------------|-----|
+| **Git for Windows** | [git-scm.com/download/win](https://git-scm.com/download/win) | Provides Git **and** Git Bash (the terminal you'll use for installation) |
+| **Bun** | Open **PowerShell** and run: `irm bun.sh/install.ps1 \| iex` | TypeScript runtime — PAI's hooks and tools run on Bun |
+| **Claude Code** | `npm install -g @anthropic-ai/claude-code` (requires Node.js) | The agentic platform PAI is built on |
+| **Node.js** (if not installed) | [nodejs.org](https://nodejs.org/) — LTS version | Required to install Claude Code via npm |
+
+After installing, **close and reopen your terminal** so PATH changes take effect.
+
+#### Step-by-Step Install
+
+> [!IMPORTANT]
+> The upstream PAI repository does not yet include Windows compatibility fixes. Use the Windows fork below, which has patched hooks, installer, and platform abstractions for Windows.
+
+Open **Git Bash** (not PowerShell, not cmd.exe) and run:
+
+```bash
+# 1. Clone the Windows-compatible fork
+git clone -b windows-install-compat https://github.com/chrisglick/Personal_AI_Infrastructure_Windows.git
+cd Personal_AI_Infrastructure_Windows/Releases/v4.0.3
+
+# 2. Copy the release to your home directory
+cp -r .claude ~/
+
+# 3. Run the installer (auto-detects Windows, uses CLI mode)
+cd ~/.claude && bash install.sh
+```
+
+The installer will:
+- Detect Windows and automatically use the CLI installer (no GUI/Electron)
+- Verify Git, Bun, and Claude Code are available
+- Walk you through identity setup (your name, AI name, timezone)
+- Configure `settings.json`, create directory structure, set up shell alias
+- Optionally configure ElevenLabs voice (voice server auto-start is not available on Windows)
+
+#### After Installation
+
+```bash
+# Reload your bash profile and launch PAI
+source ~/.bashrc
+pai
+```
+
+The `pai` alias is written to `~/.bashrc` (for Git Bash). If you also use PowerShell, the installer creates a PowerShell function in your `$PROFILE` so `pai` works there too.
+
+#### Windows-Specific Notes
+
+**How Claude Code runs hooks on Windows:**
+Claude Code uses its built-in bash shell to execute hook commands from `settings.json`. The `${PAI_DIR}` variable and `bun` prefix in hook commands work through this shell. You generally don't need to modify hook paths.
+
+**Voice features:**
+The voice server (ElevenLabs TTS) can be started manually with `bun ~/.claude/VoiceServer/server.ts`, but auto-start on login (via LaunchAgent/systemd) is not available on Windows. Voice notifications will work when the server is running.
+
+**File paths:**
+PAI installs to `C:\Users\<you>\.claude\` (same as `~/.claude/` in Git Bash). All PAI paths use forward slashes internally and work correctly in Git Bash.
+
+**Known limitations on Windows:**
+- Voice server does not auto-start on login (start manually if needed)
+- Symlinks require admin privileges — the installer uses file copies or junctions instead
+- Terminal tab titles and Kitty-specific features are not available (Windows Terminal ANSI sequences are used where possible)
+
+#### Verify Your Installation
+
+After launching PAI with `pai`, check:
+
+- [ ] PAI banner displays with version numbers
+- [ ] `claude` responds to prompts
+- [ ] A simple request like "hello" shows the PAI response format
+- [ ] Check `~/.claude/settings.json` has your name and AI name filled in
+- [ ] Hooks fire on session events (you'll see hook output in Claude Code's debug log)
+
+#### Troubleshooting (Windows)
+
+| Issue | Solution |
+|-------|----------|
+| `bun: command not found` | Reinstall: open PowerShell, run `irm bun.sh/install.ps1 \| iex`, then restart Git Bash |
+| `claude: command not found` | Reinstall: `npm install -g @anthropic-ai/claude-code`, then restart terminal |
+| `bash: install.sh: No such file` | Make sure you ran `cd ~/.claude` first — the installer must run from the `.claude` directory |
+| Hooks not firing | Check `~/.claude/settings.json` — hook commands should start with `bun` and use `${PAI_DIR}` paths |
+| `ENOENT` or path errors in hooks | Ensure `PAI_DIR` is set: add `export PAI_DIR="$HOME/.claude"` to `~/.bashrc` |
+| Voice server won't start | Run `bun ~/.claude/VoiceServer/server.ts` manually. Check port 8888 is free: `netstat -ano \| findstr :8888` (in cmd/PowerShell) |
+| Symlink errors during install | Normal on Windows without admin. The installer falls back to file copies — no action needed |
+| `git clone` fails with "invalid path" | Some PAI files may have colons in names. Try: `git clone -c core.protectNTFS=false https://...` |
+
 ---
 
 ## ❓ FAQ

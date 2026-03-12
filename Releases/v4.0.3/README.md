@@ -80,6 +80,19 @@ cd ~/.claude && bash install.sh
 bun ~/.claude/PAI/Tools/BuildCLAUDE.ts
 ```
 
+### Windows Installation
+
+See the [main README's Windows section](../../README.md#windows-installation-experimental) for full instructions. Quick summary:
+
+1. Install [Git for Windows](https://git-scm.com/download/win), [Bun](https://bun.sh) (via PowerShell: `irm bun.sh/install.ps1 | iex`), and [Claude Code](https://www.npmjs.com/package/@anthropic-ai/claude-code) (`npm install -g @anthropic-ai/claude-code`)
+2. Open **Git Bash** and run (uses the Windows-compatible fork — upstream does not include Windows fixes):
+   ```bash
+   git clone -b windows-install-compat https://github.com/chrisglick/Personal_AI_Infrastructure_Windows.git
+   cd Personal_AI_Infrastructure_Windows/Releases/v4.0.3
+   cp -r .claude ~/ && cd ~/.claude && bash install.sh
+   ```
+3. After install: `source ~/.bashrc && pai`
+
 ### Quick Manual Upgrade (from v4.0.2)
 
 Copy these files from this release over your existing ones:
