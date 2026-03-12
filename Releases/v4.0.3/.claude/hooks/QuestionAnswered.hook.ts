@@ -43,10 +43,14 @@ async function main() {
     // Extract session_id from stdin for correct tab targeting
     let sessionId: string | undefined;
     try {
-      const raw = await Promise.race([
-        Bun.stdin.text(),
-        new Promise<string>((_, reject) => setTimeout(() => reject(new Error('stdin timeout')), 2000)),
-      ]);
+      const raw = await new Promise<string>((resolve) => {
+        let data = '';
+        const timer = setTimeout(() => { process.stdin.destroy(); resolve(data); }, 2000);
+        process.stdin.setEncoding('utf8');
+        process.stdin.on('data', (chunk: string) => { data += chunk; });
+        process.stdin.on('end', () => { clearTimeout(timer); resolve(data); });
+        process.stdin.on('error', () => { clearTimeout(timer); resolve(''); });
+      });
       if (raw.trim()) {
         const parsed = JSON.parse(raw);
         sessionId = parsed.session_id;

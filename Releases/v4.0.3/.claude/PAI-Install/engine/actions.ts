@@ -275,6 +275,8 @@ export async function runPrerequisites(
       } else {
         await emit({ event: "message", content: "Please install Git: xcode-select --install" });
       }
+    } else if (det.os.platform === "win32") {
+      await emit({ event: "message", content: "Git is required. Please install Git for Windows: https://git-scm.com/download/win" });
     } else {
       // Linux
       const pkgMgr = tryExec("which apt-get") ? "apt-get" : tryExec("which yum") ? "yum" : null;
@@ -290,11 +292,18 @@ export async function runPrerequisites(
   // Bun should already be installed by bootstrap script, but verify
   if (!det.tools.bun.installed) {
     await emit({ event: "progress", step: "prerequisites", percent: 40, detail: "Installing Bun..." });
-    const result = tryExec("curl -fsSL https://bun.sh/install | bash", 60000);
-    if (result !== null) {
+    let bunInstalled = false;
+    if (process.platform === "win32") {
+      const result = tryExec('powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "irm bun.sh/install.ps1 | iex"', 60000);
+      bunInstalled = result !== null;
+    } else {
+      bunInstalled = tryExec("curl -fsSL https://bun.sh/install | bash", 60000) !== null;
+    }
+    if (bunInstalled) {
       // Update PATH
       const bunBin = join(homedir(), ".bun", "bin");
-      process.env.PATH = `${bunBin}:${process.env.PATH}`;
+      const sep = process.platform === "win32" ? ";" : ":";
+      process.env.PATH = `${bunBin}${sep}${process.env.PATH}`;
       await emit({ event: "message", content: "Bun installed successfully." });
     }
   } else {
@@ -462,25 +471,59 @@ export async function runRepository(
       mkdirSync(paiDir, { recursive: true });
     }
 
-    const cloneResult = tryExec(
-      `git clone https://github.com/danielmiessler/PAI.git "${paiDir}" 2>&1`,
-      120000
-    );
+    // Check if directory is already a git repo (from a previous partial install)
+    const alreadyGitRepo = existsSync(join(paiDir, ".git"));
 
-    if (cloneResult !== null) {
-      await emit({ event: "message", content: "PAI repository cloned successfully." });
-    } else {
-      // If clone fails (dir not empty), try to init and pull
-      await emit({ event: "progress", step: "repository", percent: 50, detail: "Directory exists, trying alternative approach..." });
-
-      const initResult = tryExec(`cd "${paiDir}" && git init && git remote add origin https://github.com/danielmiessler/PAI.git && git fetch origin && git checkout -b main origin/main 2>&1`, 120000);
-      if (initResult !== null) {
-        await emit({ event: "message", content: "PAI repository initialized and synced." });
+    if (alreadyGitRepo) {
+      // Already initialized — just fetch and force checkout
+      await emit({ event: "progress", step: "repository", percent: 40, detail: "Existing git repo found, updating..." });
+      const pullResult = tryExec(`cd "${paiDir}" && git fetch origin && git reset --hard origin/main 2>&1`, 120000);
+      if (pullResult !== null) {
+        await emit({ event: "message", content: "PAI repository synced from GitHub." });
       } else {
-        await emit({
-          event: "message",
-          content: "Could not clone PAI repo automatically. You can clone it manually later: git clone https://github.com/danielmiessler/PAI.git ~/.claude",
-        });
+        await emit({ event: "message", content: "Could not sync PAI repo. You can fix manually: cd ~/.claude && git pull origin main" });
+      }
+    } else {
+      // Try clone first (works if dir is empty)
+      const cloneResult = tryExec(
+        `git clone https://github.com/danielmiessler/PAI.git "${paiDir}" 2>&1`,
+        120000
+      );
+
+      if (cloneResult !== null) {
+        await emit({ event: "message", content: "PAI repository cloned successfully." });
+      } else {
+        // Dir not empty (installer created files before this step) — init and force checkout
+        await emit({ event: "progress", step: "repository", percent: 50, detail: "Directory has files, initializing git and syncing..." });
+
+        // Chain: init, add remote, fetch, then force checkout (overwrites installer scaffolding with repo files)
+        const initOk = tryExec(`cd "${paiDir}" && git init 2>&1`, 30000);
+        if (initOk !== null) {
+          // Add remote (ignore error if already exists)
+          tryExec(`cd "${paiDir}" && git remote add origin https://github.com/danielmiessler/PAI.git 2>&1`, 10000);
+          const fetchOk = tryExec(`cd "${paiDir}" && git fetch origin 2>&1`, 120000);
+          if (fetchOk !== null) {
+            // Force checkout main — this overwrites scaffolded files with repo contents
+            const checkoutOk = tryExec(`cd "${paiDir}" && git checkout -f -b main origin/main 2>&1`, 30000);
+            if (checkoutOk !== null) {
+              await emit({ event: "message", content: "PAI repository initialized and synced." });
+            } else {
+              // Try reset as last resort (branch may already exist)
+              tryExec(`cd "${paiDir}" && git checkout -f main 2>&1 && git reset --hard origin/main 2>&1`, 30000);
+              await emit({ event: "message", content: "PAI repository synced." });
+            }
+          } else {
+            await emit({
+              event: "message",
+              content: "Could not fetch PAI repo. Check your internet connection. You can clone it manually later: git clone https://github.com/danielmiessler/PAI.git ~/.claude",
+            });
+          }
+        } else {
+          await emit({
+            event: "message",
+            content: "Could not initialize git. You can clone it manually later: git clone https://github.com/danielmiessler/PAI.git ~/.claude",
+          });
+        }
       }
     }
   }
@@ -657,7 +700,7 @@ export async function runConfiguration(
   }
 
   if (envContent) {
-    writeFileSync(envPath, envContent, { mode: 0o600 });
+    writeFileSync(envPath, envContent, process.platform !== "win32" ? { mode: 0o600 } : undefined);
     await emit({ event: "message", content: "API keys saved securely." });
   }
 
@@ -838,59 +881,62 @@ async function startVoiceServer(paiDir: string, emit: EngineEventHandler): Promi
   // Step 1: Stop any existing voice server (old or new)
   await stopVoiceServer(emit);
 
-  // Step 2: Install as LaunchAgent (auto-start on login)
+  // Step 2: Install as LaunchAgent (auto-start on login) — Unix only
   // CRITICAL: Use async spawn instead of execSync to avoid blocking the event loop.
   // execSync blocks ALL WebSocket connections for the duration of the script.
-  await emit({ event: "progress", step: "voice", percent: 20, detail: "Installing voice server service..." });
-  if (existsSync(installScript)) {
-    try {
-      const installOk = await new Promise<boolean>((resolve) => {
-        const child = spawn("bash", [installScript], {
-          cwd: voiceServerDir,
-          stdio: ["pipe", "pipe", "pipe"],
+  // On Windows, skip bash scripts entirely and go straight to direct bun start.
+  if (process.platform !== "win32") {
+    await emit({ event: "progress", step: "voice", percent: 20, detail: "Installing voice server service..." });
+    if (existsSync(installScript)) {
+      try {
+        const installOk = await new Promise<boolean>((resolve) => {
+          const child = spawn("bash", [installScript], {
+            cwd: voiceServerDir,
+            stdio: ["pipe", "pipe", "pipe"],
+          });
+          // Pipe "y\nn" — yes to reinstall, no to menu bar
+          child.stdin?.write("y\nn\n");
+          child.stdin?.end();
+          const timer = setTimeout(() => { child.kill(); resolve(false); }, 30000);
+          child.on("close", (code) => { clearTimeout(timer); resolve(code === 0); });
+          child.on("error", () => { clearTimeout(timer); resolve(false); });
         });
-        // Pipe "y\nn" — yes to reinstall, no to menu bar
-        child.stdin?.write("y\nn\n");
-        child.stdin?.end();
-        const timer = setTimeout(() => { child.kill(); resolve(false); }, 30000);
-        child.on("close", (code) => { clearTimeout(timer); resolve(code === 0); });
-        child.on("error", () => { clearTimeout(timer); resolve(false); });
-      });
-      if (installOk) {
-        for (let i = 0; i < 10; i++) {
-          await new Promise(r => setTimeout(r, 500));
-          if (await isVoiceServerRunning()) {
-            await emit({ event: "message", content: "Voice server installed and running." });
-            return true;
+        if (installOk) {
+          for (let i = 0; i < 10; i++) {
+            await new Promise(r => setTimeout(r, 500));
+            if (await isVoiceServerRunning()) {
+              await emit({ event: "message", content: "Voice server installed and running." });
+              return true;
+            }
           }
         }
+      } catch {
+        // Fall through to next step
       }
-    } catch {
-      // Fall through to next step
     }
-  }
 
-  // Step 3: Fallback — try start.sh if LaunchAgent install failed
-  if (existsSync(startScript)) {
-    await emit({ event: "progress", step: "voice", percent: 25, detail: "Starting voice server..." });
-    try {
-      await new Promise<void>((resolve) => {
-        const child = spawn("bash", [startScript], {
-          cwd: voiceServerDir,
-          stdio: "ignore",
+    // Step 3: Fallback — try start.sh if LaunchAgent install failed
+    if (existsSync(startScript)) {
+      await emit({ event: "progress", step: "voice", percent: 25, detail: "Starting voice server..." });
+      try {
+        await new Promise<void>((resolve) => {
+          const child = spawn("bash", [startScript], {
+            cwd: voiceServerDir,
+            stdio: "ignore",
+          });
+          const timer = setTimeout(() => { child.kill(); resolve(); }, 15000);
+          child.on("close", () => { clearTimeout(timer); resolve(); });
+          child.on("error", () => { clearTimeout(timer); resolve(); });
         });
-        const timer = setTimeout(() => { child.kill(); resolve(); }, 15000);
-        child.on("close", () => { clearTimeout(timer); resolve(); });
-        child.on("error", () => { clearTimeout(timer); resolve(); });
-      });
-    } catch {
-      // Fall through
-    }
-    for (let i = 0; i < 10; i++) {
-      await new Promise(r => setTimeout(r, 500));
-      if (await isVoiceServerRunning()) {
-        await emit({ event: "message", content: "Voice server started." });
-        return true;
+      } catch {
+        // Fall through
+      }
+      for (let i = 0; i < 10; i++) {
+        await new Promise(r => setTimeout(r, 500));
+        if (await isVoiceServerRunning()) {
+          await emit({ event: "message", content: "Voice server started." });
+          return true;
+        }
       }
     }
   }
@@ -1093,9 +1139,9 @@ export async function runVoiceSetup(
     } else {
       envContent = envContent.trim() + `\nELEVENLABS_API_KEY=${state.collected.elevenLabsKey}\n`;
     }
-    writeFileSync(envPath, envContent.trim() + "\n", { mode: 0o600 });
+    writeFileSync(envPath, envContent.trim() + "\n", process.platform !== "win32" ? { mode: 0o600 } : undefined);
 
-    // Ensure symlinks exist at both ~/.claude/.env and ~/.env
+    // Ensure symlinks/copies exist at both ~/.claude/.env and ~/.env
     const symlinkTargets = [
       join(paiDir, ".env"),
       join(homedir(), ".env"),
@@ -1106,7 +1152,11 @@ export async function runVoiceSetup(
           if (lstatSync(sp).isSymbolicLink()) unlinkSync(sp);
           else continue;
         }
-        symlinkSync(envPath, sp);
+        if (process.platform === "win32") {
+          cpSync(envPath, sp);
+        } else {
+          symlinkSync(envPath, sp);
+        }
       } catch { /* non-fatal */ }
     }
   }

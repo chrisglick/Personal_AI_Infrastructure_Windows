@@ -1,13 +1,81 @@
-# Dependencies
-electron/node_modules/
-node_modules/
-
-# Build artifacts
-*.tsbuildinfo
-
-# OS files
+# macOS
 .DS_Store
-Thumbs.db
+.AppleDouble
+.LSOverride
+Icon
+._*
+.Spotlight-V100
+.Trashes
+Library
 
-# Install state (user-specific)
-install-state.json
+# Environment files
+.env
+.env.local
+.env.*.local
+*.env
+
+# API keys and secrets
+*.pem
+*.key
+*.cert
+*.p12
+*.pfx
+*_rsa
+*_rsa.pub
+*.crt
+*.cer
+
+# Logs
+*.log
+logs/
+Library/Logs/
+
+# Node/Bun
+node_modules/
+.npm
+.yarn
+.pnp.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Build outputs
+dist/
+build/
+out/
+
+# Cache
+.cache/
+*.cache
+
+# Personal/Private data
+private/
+secrets/
+credentials/
+
+# PAI Update System (sideloading)
+.claude/pai_updates/
+.claude/pai_backups/
+.claude/.pai-sync-history
+
+# Installer test artifacts (cloned PAI repo nested inside itself)
+.claude/
+.github/
+.pai-protected.json
+.gitattributes
+.env.example
+Releases/
+Tools/
+images/
+LICENSE
+SECURITY.md
+PLATFORM.md

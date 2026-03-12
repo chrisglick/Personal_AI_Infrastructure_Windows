@@ -38,6 +38,7 @@ async function main() {
       const install = spawnSync("npm", ["install"], {
         cwd: electronDir,
         stdio: "inherit",
+        shell: process.platform === "win32",
       });
       if (install.status !== 0) {
         console.error("Failed to install GUI dependencies. Falling back to CLI...\n");
@@ -61,6 +62,7 @@ async function main() {
     const child = spawn("npm", ["start"], {
       cwd: electronDir,
       stdio: "inherit",
+      shell: process.platform === "win32",
     });
 
     child.on("exit", (code) => {

@@ -180,7 +180,8 @@ async function refreshUsageCache(paiDir: string): Promise<void> {
         { encoding: 'utf-8', timeout: 3000 }
       ).trim();
     } else {
-      const credPath = join(process.env.HOME || '', '.claude', '.credentials.json');
+      const home = process.env.HOME || process.env.USERPROFILE || require('os').homedir();
+      const credPath = join(home, '.claude', '.credentials.json');
       credJson = readFileSync(credPath, 'utf-8').trim();
     }
 

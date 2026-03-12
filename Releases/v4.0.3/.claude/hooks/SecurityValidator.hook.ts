@@ -554,30 +554,20 @@ async function main(): Promise<void> {
   let input: HookInput;
 
   try {
-    // Streaming stdin read with hard timeout.
-    // Bun.stdin.text() can hang forever if stdin never closes (known Bun issue).
-    // Use streaming reader + setTimeout that forces process.exit on timeout.
-    const reader = Bun.stdin.stream().getReader();
-    let raw = '';
-    const readLoop = (async () => {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        raw += new TextDecoder().decode(value, { stream: true });
-      }
-    })();
-
-    // Hard timeout: if stdin doesn't close in 200ms, exit the process.
-    // setTimeout keeps the event loop alive, so we use process.exit to force cleanup.
-    const timeout = setTimeout(() => {
-      if (!raw.trim()) {
-        console.log(JSON.stringify({ continue: true }));
-        process.exit(0);
-      }
-    }, 200);
-
-    await Promise.race([readLoop, new Promise<void>(r => setTimeout(r, 200))]);
-    clearTimeout(timeout);
+    // Cross-platform stdin read with hard timeout.
+    // Bun.stdin.stream() fails on Windows/MSYS — use process.stdin instead.
+    // See: https://github.com/danielmiessler/Personal_AI_Infrastructure/issues/385
+    const raw = await new Promise<string>((resolve) => {
+      let data = '';
+      const timer = setTimeout(() => {
+        process.stdin.destroy();
+        resolve(data);
+      }, 200);
+      process.stdin.setEncoding('utf8');
+      process.stdin.on('data', (chunk: string) => { data += chunk; });
+      process.stdin.on('end', () => { clearTimeout(timer); resolve(data); });
+      process.stdin.on('error', () => { clearTimeout(timer); resolve(''); });
+    });
 
     if (!raw.trim()) {
       console.log(JSON.stringify({ continue: true }));

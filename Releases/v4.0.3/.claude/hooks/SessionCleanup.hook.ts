@@ -38,7 +38,8 @@ import { join } from 'path';
 import { getISOTimestamp } from './lib/time';
 import { setTabState, cleanupKittySession } from './lib/tab-setter';
 
-const BASE_DIR = process.env.PAI_DIR || join(process.env.HOME!, '.claude');
+import { homedir } from 'os';
+const BASE_DIR = process.env.PAI_DIR || join(process.env.HOME || process.env.USERPROFILE || homedir(), '.claude');
 const MEMORY_DIR = join(BASE_DIR, 'MEMORY');
 const STATE_DIR = join(MEMORY_DIR, 'STATE');
 const WORK_DIR = join(MEMORY_DIR, 'WORK');
@@ -148,10 +149,14 @@ async function main() {
     // empty or slow stdin. Proceed regardless since state is read from disk.
     let sessionId: string | undefined;
     try {
-      const input = await Promise.race([
-        Bun.stdin.text(),
-        new Promise<string>((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000))
-      ]);
+      const input = await new Promise<string>((resolve) => {
+        let data = '';
+        const timer = setTimeout(() => { process.stdin.destroy(); resolve(data); }, 3000);
+        process.stdin.setEncoding('utf8');
+        process.stdin.on('data', (chunk: string) => { data += chunk; });
+        process.stdin.on('end', () => { clearTimeout(timer); resolve(data); });
+        process.stdin.on('error', () => { clearTimeout(timer); resolve(''); });
+      });
       if (input && input.trim()) {
         const parsed = JSON.parse(input);
         sessionId = parsed.session_id;

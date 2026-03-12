@@ -74,6 +74,7 @@ ARCH="$(uname -m)"
 case "$OS" in
   Darwin) info "Platform: macOS ($ARCH)" ;;
   Linux)  info "Platform: Linux ($ARCH)" ;;
+  MINGW*|MSYS*|CYGWIN*) info "Platform: Windows ($ARCH via Git Bash)" ;;
   *)      error "Unsupported platform: $OS"; exit 1 ;;
 esac
 
@@ -119,7 +120,12 @@ if command -v bun &>/dev/null; then
   success "Bun found: v$(bun --version 2>/dev/null || echo 'unknown')"
 else
   info "Installing Bun runtime..."
-  curl -fsSL https://bun.sh/install | bash 2>/dev/null
+  if [[ "$OS" == MINGW* || "$OS" == MSYS* || "$OS" == CYGWIN* ]]; then
+    powershell.exe -ExecutionPolicy Bypass -c "irm bun.sh/install.ps1 | iex" 2>/dev/null
+    export PATH="$USERPROFILE/.bun/bin:$HOME/.bun/bin:$PATH"
+  else
+    curl -fsSL https://bun.sh/install | bash 2>/dev/null
+  fi
 
   # Add to PATH for this session
   export PATH="$HOME/.bun/bin:$PATH"
@@ -154,8 +160,11 @@ fi
 info "Launching installer..."
 echo ""
 
-# Auto-detect headless/SSH environments and fall back to CLI mode
-if [ -z "$DISPLAY" ] && [ -z "$WAYLAND_DISPLAY" ] && [ "$(uname)" != "Darwin" ]; then
+# Auto-detect environment and select installer mode
+if [[ "$OS" == MINGW* || "$OS" == MSYS* || "$OS" == CYGWIN* ]]; then
+    INSTALL_MODE="cli"
+    info "Windows detected — using CLI installer."
+elif [ -z "$DISPLAY" ] && [ -z "$WAYLAND_DISPLAY" ] && [ "$(uname)" != "Darwin" ]; then
     INSTALL_MODE="cli"
     info "Headless environment detected — using CLI installer."
 else

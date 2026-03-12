@@ -71,7 +71,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${PAI_DIR}/hooks/SecurityValidator.hook.ts"
+            "command": "bun \"${PAI_DIR}/hooks/SecurityValidator.hook.ts\""
           }
         ]
       },
@@ -80,7 +80,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${PAI_DIR}/hooks/SecurityValidator.hook.ts"
+            "command": "bun \"${PAI_DIR}/hooks/SecurityValidator.hook.ts\""
           }
         ]
       },
@@ -89,7 +89,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${PAI_DIR}/hooks/SecurityValidator.hook.ts"
+            "command": "bun \"${PAI_DIR}/hooks/SecurityValidator.hook.ts\""
           }
         ]
       },
@@ -98,7 +98,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${PAI_DIR}/hooks/SecurityValidator.hook.ts"
+            "command": "bun \"${PAI_DIR}/hooks/SecurityValidator.hook.ts\""
           }
         ]
       },
@@ -107,7 +107,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${PAI_DIR}/hooks/SetQuestionTab.hook.ts"
+            "command": "bun \"${PAI_DIR}/hooks/SetQuestionTab.hook.ts\""
           }
         ]
       },
@@ -116,7 +116,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${PAI_DIR}/hooks/AgentExecutionGuard.hook.ts"
+            "command": "bun \"${PAI_DIR}/hooks/AgentExecutionGuard.hook.ts\""
           }
         ]
       },
@@ -125,7 +125,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${PAI_DIR}/hooks/SkillGuard.hook.ts"
+            "command": "bun \"${PAI_DIR}/hooks/SkillGuard.hook.ts\""
           }
         ]
       }
@@ -136,7 +136,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${PAI_DIR}/hooks/QuestionAnswered.hook.ts"
+            "command": "bun \"${PAI_DIR}/hooks/QuestionAnswered.hook.ts\""
           }
         ]
       },
@@ -145,7 +145,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${PAI_DIR}/hooks/PRDSync.hook.ts"
+            "command": "bun \"${PAI_DIR}/hooks/PRDSync.hook.ts\""
           }
         ]
       },
@@ -154,7 +154,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${PAI_DIR}/hooks/PRDSync.hook.ts"
+            "command": "bun \"${PAI_DIR}/hooks/PRDSync.hook.ts\""
           }
         ]
       }
@@ -164,23 +164,23 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${PAI_DIR}/hooks/WorkCompletionLearning.hook.ts"
+            "command": "bun \"${PAI_DIR}/hooks/WorkCompletionLearning.hook.ts\""
           },
           {
             "type": "command",
-            "command": "${PAI_DIR}/hooks/SessionCleanup.hook.ts"
+            "command": "bun \"${PAI_DIR}/hooks/SessionCleanup.hook.ts\""
           },
           {
             "type": "command",
-            "command": "${PAI_DIR}/hooks/RelationshipMemory.hook.ts"
+            "command": "bun \"${PAI_DIR}/hooks/RelationshipMemory.hook.ts\""
           },
           {
             "type": "command",
-            "command": "${PAI_DIR}/hooks/UpdateCounts.hook.ts"
+            "command": "bun \"${PAI_DIR}/hooks/UpdateCounts.hook.ts\""
           },
           {
             "type": "command",
-            "command": "${PAI_DIR}/hooks/IntegrityCheck.hook.ts"
+            "command": "bun \"${PAI_DIR}/hooks/IntegrityCheck.hook.ts\""
           }
         ]
       }
@@ -190,15 +190,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${PAI_DIR}/hooks/RatingCapture.hook.ts"
+            "command": "bun \"${PAI_DIR}/hooks/RatingCapture.hook.ts\""
           },
           {
             "type": "command",
-            "command": "${PAI_DIR}/hooks/UpdateTabTitle.hook.ts"
+            "command": "bun \"${PAI_DIR}/hooks/UpdateTabTitle.hook.ts\""
           },
           {
             "type": "command",
-            "command": "${PAI_DIR}/hooks/SessionAutoName.hook.ts"
+            "command": "bun \"${PAI_DIR}/hooks/SessionAutoName.hook.ts\""
           }
         ]
       }
@@ -208,11 +208,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${PAI_DIR}/hooks/KittyEnvPersist.hook.ts"
+            "command": "bun \"${PAI_DIR}/hooks/KittyEnvPersist.hook.ts\""
           },
           {
             "type": "command",
-            "command": "${PAI_DIR}/hooks/LoadContext.hook.ts"
+            "command": "bun \"${PAI_DIR}/hooks/LoadContext.hook.ts\""
           },
           {
             "type": "command",
@@ -226,19 +226,19 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${PAI_DIR}/hooks/LastResponseCache.hook.ts"
+            "command": "bun \"${PAI_DIR}/hooks/LastResponseCache.hook.ts\""
           },
           {
             "type": "command",
-            "command": "${PAI_DIR}/hooks/ResponseTabReset.hook.ts"
+            "command": "bun \"${PAI_DIR}/hooks/ResponseTabReset.hook.ts\""
           },
           {
             "type": "command",
-            "command": "${PAI_DIR}/hooks/VoiceCompletion.hook.ts"
+            "command": "bun \"${PAI_DIR}/hooks/VoiceCompletion.hook.ts\""
           },
           {
             "type": "command",
-            "command": "${PAI_DIR}/hooks/DocIntegrity.hook.ts"
+            "command": "bun \"${PAI_DIR}/hooks/DocIntegrity.hook.ts\""
           }
         ]
       }
