@@ -750,7 +750,8 @@ export async function runConfiguration(
 
   // Helper: write a bash/zsh/fish alias to an rc file
   const writeBashAlias = (rcPath: string) => {
-    const aliasLine = `alias pai='bun ${join(paiDir, "PAI", "Tools", "pai.ts")}'`;
+    // Use $HOME with forward slashes — join() produces backslashes on Windows which break in bash
+    const aliasLine = `alias pai='bun "$HOME/.claude/PAI/Tools/pai.ts"'`;
     const marker = "# PAI alias";
 
     if (existsSync(rcPath)) {

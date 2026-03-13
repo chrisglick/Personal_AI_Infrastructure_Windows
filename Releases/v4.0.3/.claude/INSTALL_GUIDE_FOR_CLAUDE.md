@@ -84,7 +84,7 @@ Add the PAI alias to `~/.bashrc`:
 if ! grep -q "# PAI alias" ~/.bashrc 2>/dev/null; then
   echo '' >> ~/.bashrc
   echo '# PAI alias' >> ~/.bashrc
-  echo "alias pai='bun ~/.claude/PAI/Tools/pai.ts'" >> ~/.bashrc
+  echo "alias pai='bun \"\$HOME/.claude/PAI/Tools/pai.ts\"'" >> ~/.bashrc
 fi
 ```
 
