@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os";
 /**
  * LifeOS Pulse — Voice Module
  *
@@ -402,7 +403,7 @@ async function playAudio(audioBuffer: ArrayBuffer, volume: number = FALLBACK_VOL
     return
   }
 
-  const tempFile = `/tmp/voice-${Date.now()}.mp3`
+  const tempFile = join(tmpdir(), `voice-${Date.now()}.mp3`)
   await Bun.write(tempFile, audioBuffer)
 
   return new Promise((resolve, reject) => {

@@ -1,4 +1,6 @@
 #!/usr/bin/env bun
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 // Normalize env path vars Claude Code may inject unexpanded — literal $HOME/${HOME}
 // in LIFEOS_DIR/LIFEOS_CONFIG_DIR/PROJECTS_DIR resolves to a shadow dir (#1404 / PR #1451, author jbmml).
 for (const __k of ["LIFEOS_DIR", "LIFEOS_CONFIG_DIR", "PROJECTS_DIR"]) {
@@ -93,7 +95,7 @@ const DEFAULTS = {
   stylize: parseInt(process.env.MIDJOURNEY_DEFAULT_STYLIZE || '100'),
   quality: parseInt(process.env.MIDJOURNEY_DEFAULT_QUALITY || '1'),
   tile: false,
-  output: '/tmp/midjourney-image.png',
+  output: join(tmpdir(), 'midjourney-image.png'),
   timeout: 120,
 };
 

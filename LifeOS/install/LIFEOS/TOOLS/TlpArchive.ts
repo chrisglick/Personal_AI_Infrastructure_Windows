@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { tmpdir } from "node:os";
 /**
  * TlpArchive — scrape The Last Psychiatrist blog (thelastpsychiatrist.com)
  * and save each post as a Knowledge entry under MEMORY/KNOWLEDGE/Ideas/.
@@ -17,9 +18,9 @@ import { join } from "node:path";
 
 const HOME = process.env.HOME!;
 const KNOWLEDGE_DIR = join(HOME, ".claude/LIFEOS/MEMORY/KNOWLEDGE/Blogs");
-const URL_FILE = "/tmp/tlp-urls.txt";
-const FAILED_FILE = "/tmp/tlp-failed.txt";
-const SUCCESS_FILE = "/tmp/tlp-success.txt";
+const URL_FILE = join(tmpdir(), "tlp-urls.txt");
+const FAILED_FILE = join(tmpdir(), "tlp-failed.txt");
+const SUCCESS_FILE = join(tmpdir(), "tlp-success.txt");
 const ARCHIVE_URL = "https://thelastpsychiatrist.com/archives.html";
 const TODAY = new Date().toISOString().slice(0, 10);
 

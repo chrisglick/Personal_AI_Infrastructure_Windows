@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { tmpdir } from "node:os";
 
 /**
  * split-and-transcribe.ts
@@ -25,7 +26,7 @@ async function splitAudioFile(
   filePath: string,
   chunkSizeMB: number = 20
 ): Promise<{chunks: ChunkInfo[], tempDir: string}> {
-  const tempDir = `/tmp/transcript-${Date.now()}`;
+  const tempDir = join(tmpdir(), `transcript-${Date.now()}`);
   mkdirSync(tempDir, { recursive: true });
 
   const ext = extname(filePath);

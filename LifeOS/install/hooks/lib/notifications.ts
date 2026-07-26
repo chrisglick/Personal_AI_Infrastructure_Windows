@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os";
 /**
  * notifications.ts — Session timing + ntfy push notifications
  *
@@ -15,7 +16,7 @@ const PULSE_TOML_PATH = join(HOME, '.claude/LIFEOS/PULSE/PULSE.toml');
 // Session Timing
 // ============================================================================
 
-const SESSION_START_FILE = '/tmp/pai-session-start.txt';
+const SESSION_START_FILE = join(tmpdir(), 'pai-session-start.txt');
 
 export function recordSessionStart(): void {
   try { writeFileSync(SESSION_START_FILE, Date.now().toString()); } catch {}
