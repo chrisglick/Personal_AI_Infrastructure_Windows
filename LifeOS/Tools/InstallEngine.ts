@@ -475,6 +475,16 @@ function mergeTree(src: string, dst: string, stamp: string): { copied: number; o
   return { copied, overwritten, preserved, failures };
 }
 
+// ── Windows port: directory links ──
+// A directory symlink on Windows requires admin rights or Developer Mode; a
+// junction requires neither. Junction targets must be absolute (dataUserDir is).
+const DIR_LINK_TYPE: "junction" | undefined = process.platform === "win32" ? "junction" : undefined;
+
+/** readlink normalized for comparison — Windows junctions read back with a \?\ prefix. */
+function readLinkTarget(p: string): string {
+  return resolve(readlinkSync(p).replace(/^\\\\\?\\/, ""));
+}
+
 export function setupUserSeparation(
   configRoot: string,
   configDir: string,
@@ -487,7 +497,7 @@ export function setupUserSeparation(
     const st = lstatSync(liveUserDir);
     if (st.isSymbolicLink()) {
       try {
-        if (readlinkSync(liveUserDir) === dataUserDir) return { action: "already-linked", target: dataUserDir, copied: 0 };
+        if (readLinkTarget(liveUserDir) === resolve(dataUserDir)) return { action: "already-linked", target: dataUserDir, copied: 0 };
       } catch { /* fall through to rebuild */ }
     }
   }
@@ -514,7 +524,7 @@ export function setupUserSeparation(
     copied = merged.copied;
     try {
       mkdirSync(dirname(liveUserDir), { recursive: true });
-      symlinkSync(dataUserDir, liveUserDir);
+      symlinkSync(dataUserDir, liveUserDir, DIR_LINK_TYPE);
       return { action: "linked", target: dataUserDir, copied, overwritten: merged.overwritten, preserved: merged.preserved, backup: backupDir };
     } catch (err) {
       return { action: "linked", target: dataUserDir, copied, overwritten: merged.overwritten, preserved: merged.preserved, backup: backupDir, error: `symlink creation failed (live USER preserved at ${backupDir}): ${err instanceof Error ? err.message : String(err)}` };
@@ -524,7 +534,7 @@ export function setupUserSeparation(
   // Branch (c): fresh install — scaffold the data home (if empty) + symlink.
   try {
     mkdirSync(dirname(liveUserDir), { recursive: true });
-    symlinkSync(dataUserDir, liveUserDir);
+    symlinkSync(dataUserDir, liveUserDir, DIR_LINK_TYPE);
     return { action: "scaffolded-linked", target: dataUserDir, copied };
   } catch (err) {
     return { action: "scaffolded-linked", target: dataUserDir, copied, error: `symlink creation failed: ${err instanceof Error ? err.message : String(err)}` };
@@ -543,11 +553,11 @@ export function checkSymlinkContract(configRoot: string, configDir: string): { p
   if (!st.isSymbolicLink()) return { passed: false, detail: `${liveUserDir} is not a symlink (system/user separation broken)` };
   let target: string;
   try {
-    target = readlinkSync(liveUserDir);
+    target = readLinkTarget(liveUserDir);
   } catch (err) {
     return { passed: false, detail: `readlink failed: ${err instanceof Error ? err.message : String(err)}` };
   }
-  if (target !== expected) return { passed: false, detail: `symlink points to ${target}, expected ${expected}` };
+  if (target !== resolve(expected)) return { passed: false, detail: `symlink points to ${target}, expected ${expected}` };
   return { passed: true, detail: `${liveUserDir} → ${expected}` };
 }
 
