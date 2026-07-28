@@ -229,6 +229,27 @@ const CAPS: CapSpec[] = [
   },
 ];
 
+// Windows only: every LifeOS path (hooks, tools, PULSE) resolves via HOME.
+// PowerShell/cmd do not set it by default, so an unset HOME silently breaks
+// path resolution everywhere. Doctor reports it; the user sets it (never
+// auto-set — see WINDOWS.md).
+if (process.platform === 'win32') {
+  CAPS.unshift({
+    id: 'home-env',
+    title: 'HOME environment variable (Windows)',
+    powers: 'all LifeOS path resolution — hooks, tools, and PULSE derive paths from HOME',
+    ttlHours: 24,
+    configured: () => true, // required on every Windows install; unset is broken, not unconfigured
+    probeOffline: async () => {
+      const home = process.env.HOME;
+      return home
+        ? { ok: true, detail: `HOME set (${home})` }
+        : { ok: false, detail: 'HOME is not set — LifeOS paths will resolve incorrectly (see WINDOWS.md)' };
+    },
+    fixCmd: "run [Environment]::SetEnvironmentVariable('HOME', $env:USERPROFILE, 'User') in PowerShell, then restart the terminal (see WINDOWS.md)",
+  });
+}
+
 // ── manifest io ──────────────────────────────────────────────────────────────
 
 function loadManifest(): Manifest {
