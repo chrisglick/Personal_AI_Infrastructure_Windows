@@ -246,7 +246,7 @@ function scalarField(key: string, value: string): FmField {
 
 /** Slug from a file path (basename without .md). */
 export function slugFromPath(filePath: string): string {
-  return filePath.split("/").pop()!.replace(/\.md$/, "");
+  return filePath.split(/[\\/]/).pop()!.replace(/\.md$/, "");
 }
 
 // ── Normalize: any dialect → kb-v3 ──

@@ -185,9 +185,13 @@ function matchesPattern(relPath: string, pattern: string): boolean {
 // Normalize an absolute path to the path relative to CLAUDE_ROOT. Returns
 // the input unchanged if it does not live under CLAUDE_ROOT.
 export function relativeToClaudeRoot(absolutePath: string, claudeRoot: string): string {
-  if (absolutePath === claudeRoot) return "";
-  const prefix = claudeRoot.endsWith("/") ? claudeRoot : claudeRoot + "/";
-  return absolutePath.startsWith(prefix) ? absolutePath.slice(prefix.length) : absolutePath;
+  // Normalize to forward slashes so Windows backslash paths (from path.join /
+  // hook tool input) compare and split correctly.
+  const abs = absolutePath.replace(/\\/g, "/");
+  const root = claudeRoot.replace(/\\/g, "/");
+  if (abs === root) return "";
+  const prefix = root.endsWith("/") ? root : root + "/";
+  return abs.startsWith(prefix) ? abs.slice(prefix.length) : abs;
 }
 
 // Predicate: is this path inside any configured containment zone?

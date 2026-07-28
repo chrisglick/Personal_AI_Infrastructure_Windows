@@ -49,7 +49,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, resolve as pathResolve } from "node:path";
+import { basename, dirname, resolve as pathResolve } from "node:path";
 import { homedir } from "node:os";
 
 // ── Constants ──
@@ -353,7 +353,7 @@ const SNAPSHOT_RING = 30;
 function snapshotBeforeWrite(absPath: string, priorContent: string): void {
   try {
     mkdirSync(SNAPSHOT_DIR, { recursive: true });
-    const base = absPath.split("/").pop()!.replace(/\.md$/, "");
+    const base = basename(absPath).replace(/\.md$/, "");
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     writeFileSync(pathResolve(SNAPSHOT_DIR, `${base}__${stamp}.md`), priorContent, "utf8");
     // Trim the ring: keep the newest SNAPSHOT_RING per base file.

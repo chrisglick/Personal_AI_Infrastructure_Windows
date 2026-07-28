@@ -1035,9 +1035,12 @@ const BUMP_DEBOUNCE_MS = 30 * 1000;
  */
 export function slugFromPath(filePath: string): string | null {
   if (!filePath) return null;
-  const workDir = paiPath('MEMORY', 'WORK') + '/';
-  if (!filePath.startsWith(workDir)) return null;
-  const rest = filePath.slice(workDir.length);
+  // Normalize to forward slashes: paiPath uses path.join (backslashes on
+  // Windows) and hook-supplied file paths may use either separator.
+  const normPath = filePath.replace(/\\/g, '/');
+  const workDir = paiPath('MEMORY', 'WORK').replace(/\\/g, '/') + '/';
+  if (!normPath.startsWith(workDir)) return null;
+  const rest = normPath.slice(workDir.length);
   const slug = rest.split('/')[0];
   return slug || null;
 }

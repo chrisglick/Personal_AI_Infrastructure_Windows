@@ -69,7 +69,7 @@ function strippedHash(content: string): string {
 }
 
 function pathRelativeToClaude(path: string): string {
-  return relative(CLAUDE_DIR, path).split("/").join("/");
+  return relative(CLAUDE_DIR, path).replace(/\\/g, "/");
 }
 
 function generatorFor(entry: ContextFile): string | null {
