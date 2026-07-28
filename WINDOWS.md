@@ -27,6 +27,14 @@ Windows symlinks require admin rights or Developer Mode; this fork uses an NTFS 
 ### Temp paths
 Hardcoded `/tmp` paths are routed through `os.tmpdir()` (commit `9450520`). No user action needed.
 
+### Pulse daemon: Scheduled Task instead of launchd/systemd
+Upstream manages the Pulse daemon (:31337) with `manage.sh` (launchd plist on macOS, systemd user unit on Linux) — neither exists on Windows. This fork adds **`LIFEOS/PULSE/manage.ps1`** with the same commands:
+```powershell
+powershell -File "$env:USERPROFILE\.claude\LIFEOS\PULSE\manage.ps1" install   # logon Scheduled Task 'LifeOS-Pulse' + start + :31337 bind verification
+powershell -File "$env:USERPROFILE\.claude\LIFEOS\PULSE\manage.ps1" status   # PID + uptime + last job runs
+```
+`start|stop|restart|uninstall` also supported. Logs land in `LIFEOS/PULSE/logs/`.
+
 ### Voice
 Voice notifications use ElevenLabs cloud upstream. Running without voice is a supported state: decline it via `bun Doctor.ts` (`decline` path). Nothing else in the system depends on it.
 
